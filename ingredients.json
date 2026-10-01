@@ -1,0 +1,2911 @@
+{
+  "meta": {
+    "source": "UESP wiki (en.uesp.net): Skyrim:Ingredients overview plus individual item pages and creation pages, all read 2026-10-01",
+    "edition": "Skyrim Special Edition / Anniversary Edition (base game, all DLC, and the Creation Club content listed on UESP)",
+    "objectIDFormat": "low 3 bytes of the full formID, 8-digit uppercase hex: e.g. 00106e1b -> 0x000106E1B, FExxx82A -> 0x0000082A, 0100306D -> 0x0000306D",
+    "ingredients": 191,
+    "notes": [
+      "UESP's Skyrim:Ingredients page claims '73 ingredients are added by the following Creations', but its CC table actually holds 74 rows: the extra row is the Bloodchill Manor Nightshade variant (xx042A61), which belongs to none of the listed creations. Additionally, UESP's Category:Skyrim-Creation_Club-Ingredients contains 'Healing Salts' (Bittercup, FExxxF86), missing from the ingredients overview table entirely. This file includes all 75 unique CC-related ingredients.",
+      "Flame Stalk exists as two distinct INGR records with identical effects: one from Rare Curios (FExxx82A) and one from Saints & Seducers (xx095E23); both are listed under formids. UESP notes the two versions do not stack in the inventory.",
+      "Rot Scale, Screaming Maw, and Thorn Hook are listed under Saints & Seducers in the ingredients overview, but their UESP item pages state the INGR records were added to Update.esm by Special Edition Patch 1.5.97; they are only obtainable in-game with Saints & Seducers (plants in the Solitude Sewers). Their plugin is recorded as Update.esm.",
+      "The task brief's example gave Fishing as ccBGSSSE001-Fish.esl; UESP's Skyrim:Fishing page says ccBGSSSE001-Fish.esm. UESP was used.",
+      "CC plugin filenames are exactly as displayed on UESP infoboxes; most render all-lowercase there (Windows plugin filenames are case-insensitive, so this does not affect load-order matching).",
+      "Mort Flesh (Plague of the Dead, FExxx80C) and Hunger Tongue (Rare Curios, FExxx80C) share the same objectID in different plugins; this is normal and not a conflict.",
+      "Flame Stalk (Rare Curios) carries a full-plugin-style ID xx095E23 only in its Saints & Seducers record; the Rare Curios record is the light-plugin FExxx82A.",
+      "Every ingredient has exactly 4 effects, in UESP's canonical order and naming.",
+      "Healing Salts (Bittercup) is unused content; UESP calls it an exact duplicate of Salt Pile (same 4 effects).",
+      "Farengar's Frost Salt and Fine-Cut Void Salts share their INGR records with Frost Salts (0x0003AD5F) and Void Salts (0x0003AD60) respectively; both names therefore map to the same (plugin, objectID) key.",
+      "No formIDs or effects were invented: every entry traces to a UESP page actually read."
+    ],
+    "unresolvedFormIDs": [],
+    "spotChecks": [
+      "Aloe Vera Leaves (_ResourcePack.esl:0x000000D0)",
+      "Flame Stalk (ccbgssse037-curios.esl:0x0000082A; ccbgssse025-advdsgs.esm:0x00095E23)",
+      "Ironwood Fruit (cckrtsse001_altar.esl:0x00000F0F)",
+      "Nightshade (Bloodchill Manor) (cceejsse005-cave.esm:0x00042A61)",
+      "Rot Scale (Update.esm:0x0000306D)",
+      "Blue Mountain Flower (Skyrim.esm:0x00077E1C)",
+      "Blue Butterfly Wing (Skyrim.esm:0x000727DE)",
+      "Chaurus Hunter Antennae (Dawnguard.esm:0x000183B7)",
+      "Screaming Maw (Update.esm:0x0000306E)",
+      "Healing Salts (cckrtsse001_altar.esl:0x00000F86)",
+      "Glassfish (ccBGSSSE001-Fish.esm:0x000008EE)",
+      "Wild Grass Pod (cctwbsse001-puzzledungeon.esm:0x00019D3A)",
+      "Steel-Blue Entoloma (ccbgssse040-advobgobs.esl:0x00000832)",
+      "Mort Flesh (ccbgssse003-zombies.esl:0x0000080C)",
+      "Bloodgrass (ccbgssse067-daedinv.esm:0x00024C13)",
+      "Corrupted Human Heart (ccedhsse002-splkntset.esl:0x0000085B)"
+    ]
+  },
+  "ingredients": [
+    {
+      "name": "Abecean Longfin",
+      "effects": [
+        "Weakness to Frost",
+        "Fortify Sneak",
+        "Weakness to Poison",
+        "Fortify Restoration"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00106E1B"
+        }
+      ]
+    },
+    {
+      "name": "Alocasia Fruit",
+      "effects": [
+        "Regenerate Stamina",
+        "Light",
+        "Ravage Magicka",
+        "Regenerate Health"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000D62"
+        }
+      ]
+    },
+    {
+      "name": "Aloe Vera Leaves",
+      "effects": [
+        "Restore Health",
+        "Restore Stamina",
+        "Damage Magicka",
+        "Invisibility"
+      ],
+      "formids": [
+        {
+          "plugin": "_ResourcePack.esl",
+          "objectID": "0x000000D0"
+        }
+      ]
+    },
+    {
+      "name": "Ambrosia",
+      "effects": [
+        "Restore Health",
+        "Regenerate Health",
+        "Fortify Health",
+        "Cure Poison"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000836"
+        }
+      ]
+    },
+    {
+      "name": "Ancestor Moth Wing",
+      "effects": [
+        "Damage Stamina",
+        "Fortify Conjuration",
+        "Damage Magicka Regen",
+        "Fortify Enchanting"
+      ],
+      "formids": [
+        {
+          "plugin": "Dawnguard.esm",
+          "objectID": "0x000059BA"
+        }
+      ]
+    },
+    {
+      "name": "Angelfish",
+      "effects": [
+        "Regenerate Health",
+        "Resist Fire",
+        "Fortify Marksman",
+        "Waterbreathing"
+      ],
+      "formids": [
+        {
+          "plugin": "ccBGSSSE001-Fish.esm",
+          "objectID": "0x000008EB"
+        }
+      ]
+    },
+    {
+      "name": "Angler Larvae",
+      "effects": [
+        "Lingering Damage Health",
+        "Regenerate Stamina",
+        "Waterbreathing",
+        "Fortify Two-handed"
+      ],
+      "formids": [
+        {
+          "plugin": "ccBGSSSE001-Fish.esm",
+          "objectID": "0x000008F0"
+        }
+      ]
+    },
+    {
+      "name": "Ash Creep Cluster",
+      "effects": [
+        "Damage Stamina",
+        "Invisibility",
+        "Resist Fire",
+        "Fortify Destruction"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x0001CD74"
+        }
+      ]
+    },
+    {
+      "name": "Ash Hopper Jelly",
+      "effects": [
+        "Restore Health",
+        "Fortify Light Armor",
+        "Resist Shock",
+        "Weakness to Frost"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x0001CD71"
+        }
+      ]
+    },
+    {
+      "name": "Ashen Grass Pod",
+      "effects": [
+        "Resist Fire",
+        "Weakness to Shock",
+        "Fortify Lockpicking",
+        "Fortify Sneak"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x00016E26"
+        }
+      ]
+    },
+    {
+      "name": "Aster Bloom Core",
+      "effects": [
+        "Resist Magic",
+        "Fortify Light Armor",
+        "Fortify Block",
+        "Paralysis"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000D66"
+        }
+      ]
+    },
+    {
+      "name": "Bear Claws",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Health",
+        "Fortify One-handed",
+        "Damage Magicka Regen"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006BC02"
+        }
+      ]
+    },
+    {
+      "name": "Bee",
+      "effects": [
+        "Restore Stamina",
+        "Ravage Stamina",
+        "Regenerate Stamina",
+        "Weakness to Shock"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000A9195"
+        }
+      ]
+    },
+    {
+      "name": "Beehive Husk",
+      "effects": [
+        "Resist Poison",
+        "Fortify Light Armor",
+        "Fortify Sneak",
+        "Fortify Destruction"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000A9191"
+        }
+      ]
+    },
+    {
+      "name": "Berit's Ashes",
+      "effects": [
+        "Damage Stamina",
+        "Resist Fire",
+        "Fortify Conjuration",
+        "Ravage Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000705B7"
+        }
+      ]
+    },
+    {
+      "name": "Bittergreen Petals",
+      "effects": [
+        "Lingering Damage Stamina",
+        "Invisibility",
+        "Cure Poison",
+        "Damage Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000D68"
+        }
+      ]
+    },
+    {
+      "name": "Bleeding Crown",
+      "effects": [
+        "Weakness to Fire",
+        "Fortify Block",
+        "Weakness to Poison",
+        "Resist Magic"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0004DA20"
+        }
+      ]
+    },
+    {
+      "name": "Blind Watcher's Eye",
+      "effects": [
+        "Light",
+        "Fortify Magicka",
+        "Fortify Alteration",
+        "Spell Absorption"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000822"
+        }
+      ]
+    },
+    {
+      "name": "Bliss Bug Thorax",
+      "effects": [
+        "Weakness to Fire",
+        "Resist Fire",
+        "Fortify Heavy Armor",
+        "Fortify Illusion"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse025-advdsgs.esm",
+          "objectID": "0x00059155"
+        }
+      ]
+    },
+    {
+      "name": "Blister Pod Cap",
+      "effects": [
+        "Restore Magicka",
+        "Fortify Magicka",
+        "Night Eye",
+        "Invisibility"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000D6A"
+        }
+      ]
+    },
+    {
+      "name": "Blisterwort",
+      "effects": [
+        "Damage Stamina",
+        "Frenzy",
+        "Restore Health",
+        "Fortify Smithing"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0004DA25"
+        }
+      ]
+    },
+    {
+      "name": "Bloodgrass",
+      "effects": [
+        "Invisibility",
+        "Resist Poison",
+        "Slow",
+        "Fortify Health"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse067-daedinv.esm",
+          "objectID": "0x00024C13"
+        }
+      ]
+    },
+    {
+      "name": "Blue Butterfly Wing",
+      "effects": [
+        "Damage Stamina",
+        "Fortify Conjuration",
+        "Damage Magicka Regen",
+        "Fortify Enchanting"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000727DE"
+        }
+      ]
+    },
+    {
+      "name": "Blue Dartwing",
+      "effects": [
+        "Resist Shock",
+        "Fortify Pickpocket",
+        "Restore Health",
+        "Fear"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000E4F0C"
+        }
+      ]
+    },
+    {
+      "name": "Blue Mountain Flower",
+      "effects": [
+        "Restore Health",
+        "Fortify Conjuration",
+        "Fortify Health",
+        "Damage Magicka Regen"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00077E1C"
+        }
+      ]
+    },
+    {
+      "name": "Boar Tusk",
+      "effects": [
+        "Fortify Stamina",
+        "Fortify Health",
+        "Fortify Block",
+        "Frenzy"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x0001CD6F"
+        }
+      ]
+    },
+    {
+      "name": "Bog Beacon",
+      "effects": [
+        "Restore Magicka",
+        "Fortify Heavy Armor",
+        "Fear",
+        "Damage Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000D6C"
+        }
+      ]
+    },
+    {
+      "name": "Bone Meal",
+      "effects": [
+        "Damage Stamina",
+        "Resist Fire",
+        "Fortify Conjuration",
+        "Ravage Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00034CDD"
+        }
+      ]
+    },
+    {
+      "name": "Briar Heart",
+      "effects": [
+        "Restore Magicka",
+        "Fortify Block",
+        "Paralysis",
+        "Fortify Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD61"
+        }
+      ]
+    },
+    {
+      "name": "Bungler's Bane",
+      "effects": [
+        "Slow",
+        "Ravage Stamina",
+        "Damage Stamina Regen",
+        "Resist Magic"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000802"
+        }
+      ]
+    },
+    {
+      "name": "Burnt Spriggan Wood",
+      "effects": [
+        "Weakness to Fire",
+        "Fortify Alteration",
+        "Damage Magicka Regen",
+        "Slow"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x0001CD6E"
+        }
+      ]
+    },
+    {
+      "name": "Butterfly Wing",
+      "effects": [
+        "Restore Health",
+        "Fortify Barter",
+        "Lingering Damage Stamina",
+        "Damage Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000727E0"
+        }
+      ]
+    },
+    {
+      "name": "Canis Root",
+      "effects": [
+        "Damage Stamina",
+        "Fortify One-handed",
+        "Fortify Marksman",
+        "Paralysis"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006ABCB"
+        }
+      ]
+    },
+    {
+      "name": "Charred Skeever Hide",
+      "effects": [
+        "Restore Stamina",
+        "Cure Disease",
+        "Resist Poison",
+        "Restore Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00052695"
+        }
+      ]
+    },
+    {
+      "name": "Chaurus Eggs",
+      "effects": [
+        "Weakness to Poison",
+        "Fortify Stamina",
+        "Damage Magicka",
+        "Invisibility"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD56"
+        }
+      ]
+    },
+    {
+      "name": "Chaurus Hunter Antennae",
+      "effects": [
+        "Damage Stamina",
+        "Fortify Conjuration",
+        "Damage Magicka Regen",
+        "Fortify Enchanting"
+      ],
+      "formids": [
+        {
+          "plugin": "Dawnguard.esm",
+          "objectID": "0x000183B7"
+        }
+      ]
+    },
+    {
+      "name": "Chicken's Egg",
+      "effects": [
+        "Resist Magic",
+        "Damage Magicka Regen",
+        "Waterbreathing",
+        "Lingering Damage Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00023D77"
+        }
+      ]
+    },
+    {
+      "name": "Chokeberry",
+      "effects": [
+        "Damage Health",
+        "Ravage Health",
+        "Lingering Damage Health",
+        "Weakness to Poison"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000838"
+        }
+      ]
+    },
+    {
+      "name": "Chokeweed",
+      "effects": [
+        "Weakness to Frost",
+        "Restore Stamina",
+        "Cure Disease",
+        "Damage Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000804"
+        }
+      ]
+    },
+    {
+      "name": "Coda Flower",
+      "effects": [
+        "Damage Health",
+        "Lingering Damage Stamina",
+        "Ravage Magicka",
+        "Fortify Carry Weight"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000805"
+        }
+      ]
+    },
+    {
+      "name": "Comberry",
+      "effects": [
+        "Damage Stamina",
+        "Spell Absorption",
+        "Restore Magicka",
+        "Fortify Destruction"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000806"
+        }
+      ]
+    },
+    {
+      "name": "Congealed Putrescence",
+      "effects": [
+        "Ravage Health",
+        "Restore Magicka",
+        "Weakness to Fire",
+        "Fortify Conjuration"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000807"
+        }
+      ]
+    },
+    {
+      "name": "Corkbulb Root",
+      "effects": [
+        "Paralysis",
+        "Restore Health",
+        "Resist Shock",
+        "Fortify Marksman"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000809"
+        }
+      ]
+    },
+    {
+      "name": "Corrupted Human Heart",
+      "effects": [
+        "Damage Health",
+        "Damage Magicka",
+        "Damage Magicka Regen",
+        "Frenzy"
+      ],
+      "formids": [
+        {
+          "plugin": "ccedhsse002-splkntset.esl",
+          "objectID": "0x0000085B"
+        }
+      ]
+    },
+    {
+      "name": "Creep Cluster",
+      "effects": [
+        "Restore Magicka",
+        "Damage Stamina Regen",
+        "Fortify Carry Weight",
+        "Weakness to Magic"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000B2183"
+        }
+      ]
+    },
+    {
+      "name": "Crimson Nirnroot",
+      "effects": [
+        "Damage Health",
+        "Damage Stamina",
+        "Invisibility",
+        "Resist Magic"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000B701A"
+        }
+      ]
+    },
+    {
+      "name": "Cyrodilic Spadetail",
+      "effects": [
+        "Damage Stamina",
+        "Fortify Restoration",
+        "Fear",
+        "Ravage Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00106E19"
+        }
+      ]
+    },
+    {
+      "name": "Daedra Heart",
+      "effects": [
+        "Restore Health",
+        "Damage Stamina Regen",
+        "Damage Magicka",
+        "Fear"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD5B"
+        }
+      ]
+    },
+    {
+      "name": "Daedra Silk",
+      "effects": [
+        "Lingering Damage Stamina",
+        "Paralysis",
+        "Night Eye",
+        "Invisibility"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000080A"
+        }
+      ]
+    },
+    {
+      "name": "Daedra Venin",
+      "effects": [
+        "Ravage Health",
+        "Paralysis",
+        "Fortify Destruction",
+        "Spell Absorption"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000080B"
+        }
+      ]
+    },
+    {
+      "name": "Daedroth Teeth",
+      "effects": [
+        "Resist Frost",
+        "Light",
+        "Damage Magicka Regen",
+        "Regenerate Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000826"
+        }
+      ]
+    },
+    {
+      "name": "Deathbell",
+      "effects": [
+        "Damage Health",
+        "Ravage Stamina",
+        "Slow",
+        "Weakness to Poison"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000516C8"
+        }
+      ]
+    },
+    {
+      "name": "Dragon's Tongue",
+      "effects": [
+        "Resist Fire",
+        "Fortify Barter",
+        "Fortify Illusion",
+        "Fortify Two-handed"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000889A2"
+        }
+      ]
+    },
+    {
+      "name": "Dreugh Wax",
+      "effects": [
+        "Weakness to Magic",
+        "Frenzy",
+        "Fortify Enchanting",
+        "Fortify Smithing"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000827"
+        }
+      ]
+    },
+    {
+      "name": "Dwarven Oil",
+      "effects": [
+        "Weakness to Magic",
+        "Fortify Illusion",
+        "Regenerate Magicka",
+        "Restore Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000F11C0"
+        }
+      ]
+    },
+    {
+      "name": "Ectoplasm",
+      "effects": [
+        "Restore Magicka",
+        "Fortify Destruction",
+        "Fortify Magicka",
+        "Damage Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD63"
+        }
+      ]
+    },
+    {
+      "name": "Elves Ear",
+      "effects": [
+        "Restore Magicka",
+        "Fortify Marksman",
+        "Weakness to Frost",
+        "Resist Fire"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00034D31"
+        }
+      ]
+    },
+    {
+      "name": "Elytra Ichor",
+      "effects": [
+        "Restore Magicka",
+        "Invisibility",
+        "Slow",
+        "Fear"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000828"
+        }
+      ]
+    },
+    {
+      "name": "Emperor Parasol Moss",
+      "effects": [
+        "Damage Health",
+        "Fortify Magicka",
+        "Regenerate Health",
+        "Fortify Two-handed"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x0001FF75"
+        }
+      ]
+    },
+    {
+      "name": "Eye of Sabre Cat",
+      "effects": [
+        "Restore Stamina",
+        "Ravage Health",
+        "Damage Magicka",
+        "Restore Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006BC07"
+        }
+      ]
+    },
+    {
+      "name": "Falmer Ear",
+      "effects": [
+        "Damage Health",
+        "Frenzy",
+        "Resist Poison",
+        "Fortify Lockpicking"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD5D"
+        }
+      ]
+    },
+    {
+      "name": "Farengar's Frost Salt",
+      "effects": [
+        "Weakness to Fire",
+        "Resist Frost",
+        "Restore Magicka",
+        "Fortify Conjuration"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD5F"
+        }
+      ]
+    },
+    {
+      "name": "Felsaad Tern Feathers",
+      "effects": [
+        "Restore Health",
+        "Fortify Light Armor",
+        "Cure Disease",
+        "Resist Magic"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x0003CD8E"
+        }
+      ]
+    },
+    {
+      "name": "Fine-Cut Void Salts",
+      "effects": [
+        "Weakness to Shock",
+        "Resist Magic",
+        "Damage Health",
+        "Fortify Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD60"
+        }
+      ]
+    },
+    {
+      "name": "Fire Petal",
+      "effects": [
+        "Damage Health",
+        "Resist Fire",
+        "Spell Absorption",
+        "Paralysis"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000829"
+        }
+      ]
+    },
+    {
+      "name": "Fire Salts",
+      "effects": [
+        "Weakness to Frost",
+        "Resist Fire",
+        "Restore Magicka",
+        "Regenerate Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD5E"
+        }
+      ]
+    },
+    {
+      "name": "Flame Stalk",
+      "effects": [
+        "Restore Health",
+        "Resist Frost",
+        "Weakness to Fire",
+        "Invisibility"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000082A"
+        },
+        {
+          "plugin": "ccbgssse025-advdsgs.esm",
+          "objectID": "0x00095E23"
+        }
+      ]
+    },
+    {
+      "name": "Fly Amanita",
+      "effects": [
+        "Resist Fire",
+        "Fortify Two-handed",
+        "Frenzy",
+        "Regenerate Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0004DA00"
+        }
+      ]
+    },
+    {
+      "name": "Frost Mirriam",
+      "effects": [
+        "Resist Frost",
+        "Fortify Sneak",
+        "Ravage Magicka",
+        "Damage Stamina Regen"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00034D32"
+        }
+      ]
+    },
+    {
+      "name": "Frost Salts",
+      "effects": [
+        "Weakness to Fire",
+        "Resist Frost",
+        "Restore Magicka",
+        "Fortify Conjuration"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD5F"
+        }
+      ]
+    },
+    {
+      "name": "Fungus Stalk",
+      "effects": [
+        "Restore Magicka",
+        "Fortify Health",
+        "Fortify Stamina",
+        "Waterbreathing"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000082B"
+        }
+      ]
+    },
+    {
+      "name": "Garlic",
+      "effects": [
+        "Resist Poison",
+        "Fortify Stamina",
+        "Regenerate Magicka",
+        "Regenerate Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00034D22"
+        }
+      ]
+    },
+    {
+      "name": "Giant Lichen",
+      "effects": [
+        "Weakness to Shock",
+        "Ravage Health",
+        "Weakness to Poison",
+        "Restore Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0007E8C1"
+        }
+      ]
+    },
+    {
+      "name": "Giant's Toe",
+      "effects": [
+        "Damage Stamina",
+        "Fortify Health",
+        "Fortify Carry Weight",
+        "Damage Stamina Regen"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD64"
+        }
+      ]
+    },
+    {
+      "name": "Glassfish",
+      "effects": [
+        "Restore Magicka",
+        "Invisibility",
+        "Fortify Illusion",
+        "Fortify Persuasion"
+      ],
+      "formids": [
+        {
+          "plugin": "ccBGSSSE001-Fish.esm",
+          "objectID": "0x000008EE"
+        }
+      ]
+    },
+    {
+      "name": "Gleamblossom",
+      "effects": [
+        "Resist Magic",
+        "Fear",
+        "Regenerate Health",
+        "Paralysis"
+      ],
+      "formids": [
+        {
+          "plugin": "Dawnguard.esm",
+          "objectID": "0x0000B097"
+        }
+      ]
+    },
+    {
+      "name": "Glow Dust",
+      "effects": [
+        "Damage Magicka",
+        "Damage Magicka Regen",
+        "Fortify Destruction",
+        "Resist Shock"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD73"
+        }
+      ]
+    },
+    {
+      "name": "Glowing Mushroom",
+      "effects": [
+        "Resist Shock",
+        "Fortify Destruction",
+        "Fortify Smithing",
+        "Fortify Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0007EE01"
+        }
+      ]
+    },
+    {
+      "name": "Gnarl Bark",
+      "effects": [
+        "Damage Health",
+        "Regenerate Health",
+        "Fortify Heavy Armor",
+        "Resist Fire"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000082C"
+        }
+      ]
+    },
+    {
+      "name": "Gold Kanet",
+      "effects": [
+        "Paralysis",
+        "Ravage Health",
+        "Weakness to Frost",
+        "Fortify Smithing"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000082D"
+        }
+      ]
+    },
+    {
+      "name": "Goldfish",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Heavy Armor",
+        "Waterbreathing",
+        "Resist Frost"
+      ],
+      "formids": [
+        {
+          "plugin": "ccBGSSSE001-Fish.esm",
+          "objectID": "0x000008EF"
+        }
+      ]
+    },
+    {
+      "name": "Grass Pod",
+      "effects": [
+        "Resist Poison",
+        "Ravage Magicka",
+        "Fortify Alteration",
+        "Restore Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00083E64"
+        }
+      ]
+    },
+    {
+      "name": "Green Butterfly Wing",
+      "effects": [
+        "Restore Magicka",
+        "Fear",
+        "Slow",
+        "Invisibility"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse025-advdsgs.esm",
+          "objectID": "0x00059151"
+        }
+      ]
+    },
+    {
+      "name": "Hackle-Lo Leaf",
+      "effects": [
+        "Restore Stamina",
+        "Paralysis",
+        "Waterbreathing",
+        "Fortify Restoration"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000082E"
+        }
+      ]
+    },
+    {
+      "name": "Hagraven Claw",
+      "effects": [
+        "Resist Magic",
+        "Lingering Damage Magicka",
+        "Fortify Enchanting",
+        "Fortify Barter"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006B689"
+        }
+      ]
+    },
+    {
+      "name": "Hagraven Feathers",
+      "effects": [
+        "Damage Magicka",
+        "Fortify Conjuration",
+        "Frenzy",
+        "Weakness to Shock"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD66"
+        }
+      ]
+    },
+    {
+      "name": "Hanging Moss",
+      "effects": [
+        "Damage Magicka",
+        "Fortify Health",
+        "Damage Magicka Regen",
+        "Fortify One-handed"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00057F91"
+        }
+      ]
+    },
+    {
+      "name": "Harrada",
+      "effects": [
+        "Damage Health",
+        "Damage Magicka",
+        "Paralysis",
+        "Damage Magicka Regen"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse067-daedinv.esm",
+          "objectID": "0x00024C11"
+        }
+      ]
+    },
+    {
+      "name": "Hawk Beak",
+      "effects": [
+        "Restore Stamina",
+        "Resist Frost",
+        "Fortify Carry Weight",
+        "Resist Shock"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000E7EBC"
+        }
+      ]
+    },
+    {
+      "name": "Hawk Feathers",
+      "effects": [
+        "Cure Disease",
+        "Fortify Light Armor",
+        "Fortify One-handed",
+        "Fortify Sneak"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000E7ED0"
+        }
+      ]
+    },
+    {
+      "name": "Hawk's Egg",
+      "effects": [
+        "Resist Magic",
+        "Damage Magicka Regen",
+        "Waterbreathing",
+        "Lingering Damage Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "HearthFires.esm",
+          "objectID": "0x0000F1CC"
+        }
+      ]
+    },
+    {
+      "name": "Healing Salts",
+      "effects": [
+        "Weakness to Magic",
+        "Fortify Restoration",
+        "Slow",
+        "Regenerate Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "cckrtsse001_altar.esl",
+          "objectID": "0x00000F86"
+        }
+      ]
+    },
+    {
+      "name": "Heart of Order",
+      "effects": [
+        "Restore Health",
+        "Fortify Health",
+        "Fortify One-handed",
+        "Fortify Two-handed"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000851"
+        }
+      ]
+    },
+    {
+      "name": "Histcarp",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Magicka",
+        "Damage Stamina Regen",
+        "Waterbreathing"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00106E18"
+        }
+      ]
+    },
+    {
+      "name": "Honeycomb",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Block",
+        "Fortify Light Armor",
+        "Ravage Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000B08C5"
+        }
+      ]
+    },
+    {
+      "name": "Human Flesh",
+      "effects": [
+        "Damage Health",
+        "Paralysis",
+        "Restore Magicka",
+        "Fortify Sneak"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x001016B3"
+        }
+      ]
+    },
+    {
+      "name": "Human Heart",
+      "effects": [
+        "Damage Health",
+        "Damage Magicka",
+        "Damage Magicka Regen",
+        "Frenzy"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000B18CD"
+        }
+      ]
+    },
+    {
+      "name": "Hunger Tongue",
+      "effects": [
+        "Weakness to Fire",
+        "Cure Disease",
+        "Cure Poison",
+        "Fortify Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000080C"
+        }
+      ]
+    },
+    {
+      "name": "Hydnum Azure Giant Spore",
+      "effects": [
+        "Resist Frost",
+        "Fortify Health",
+        "Regenerate Health",
+        "Light"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000080D"
+        }
+      ]
+    },
+    {
+      "name": "Hypha Facia",
+      "effects": [
+        "Weakness to Poison",
+        "Frenzy",
+        "Ravage Stamina",
+        "Resist Magic"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000080E"
+        }
+      ]
+    },
+    {
+      "name": "Ice Wraith Teeth",
+      "effects": [
+        "Weakness to Frost",
+        "Fortify Heavy Armor",
+        "Invisibility",
+        "Weakness to Fire"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD6A"
+        }
+      ]
+    },
+    {
+      "name": "Imp Gall",
+      "effects": [
+        "Damage Health",
+        "Weakness to Fire",
+        "Fortify Barter",
+        "Cure Poison"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000080F"
+        }
+      ]
+    },
+    {
+      "name": "Imp Stool",
+      "effects": [
+        "Damage Health",
+        "Lingering Damage Health",
+        "Paralysis",
+        "Restore Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0004DA23"
+        }
+      ]
+    },
+    {
+      "name": "Ironwood Fruit",
+      "effects": [
+        "Restore Health",
+        "Resist Fire",
+        "Damage Stamina",
+        "Restore Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "cckrtsse001_altar.esl",
+          "objectID": "0x00000F0F"
+        }
+      ]
+    },
+    {
+      "name": "Jarrin Root",
+      "effects": [
+        "Damage Health",
+        "Damage Magicka",
+        "Damage Stamina",
+        "Damage Magicka Regen"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0001BCBC"
+        }
+      ]
+    },
+    {
+      "name": "Jazbay Grapes",
+      "effects": [
+        "Weakness to Magic",
+        "Fortify Magicka",
+        "Regenerate Magicka",
+        "Ravage Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006AC4A"
+        }
+      ]
+    },
+    {
+      "name": "Juniper Berries",
+      "effects": [
+        "Weakness to Fire",
+        "Fortify Marksman",
+        "Regenerate Health",
+        "Damage Stamina Regen"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0005076E"
+        }
+      ]
+    },
+    {
+      "name": "Juvenile Mudcrab",
+      "effects": [
+        "Regenerate Stamina",
+        "Fortify Carry Weight",
+        "Cure Disease",
+        "Fortify Two-handed"
+      ],
+      "formids": [
+        {
+          "plugin": "ccBGSSSE001-Fish.esm",
+          "objectID": "0x000008F2"
+        }
+      ]
+    },
+    {
+      "name": "Kagouti Hide",
+      "effects": [
+        "Lingering Damage Stamina",
+        "Night Eye",
+        "Fortify Carry Weight",
+        "Resist Shock"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000810"
+        }
+      ]
+    },
+    {
+      "name": "Kresh Fiber",
+      "effects": [
+        "Weakness to Magic",
+        "Slow",
+        "Fortify Sneak",
+        "Fortify Pickpocket"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000811"
+        }
+      ]
+    },
+    {
+      "name": "Large Antlers",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Stamina",
+        "Slow",
+        "Damage Stamina Regen"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006BC0A"
+        }
+      ]
+    },
+    {
+      "name": "Lavender",
+      "effects": [
+        "Resist Magic",
+        "Fortify Stamina",
+        "Ravage Magicka",
+        "Fortify Conjuration"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00045C28"
+        }
+      ]
+    },
+    {
+      "name": "Lichor",
+      "effects": [
+        "Restore Magicka",
+        "Regenerate Magicka",
+        "Fortify Magicka",
+        "Spell Absorption"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000837"
+        }
+      ]
+    },
+    {
+      "name": "Luminous Russula",
+      "effects": [
+        "Lingering Damage Stamina",
+        "Lingering Damage Health",
+        "Waterbreathing",
+        "Fear"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000813"
+        }
+      ]
+    },
+    {
+      "name": "Luna Moth Wing",
+      "effects": [
+        "Damage Magicka",
+        "Fortify Light Armor",
+        "Regenerate Health",
+        "Invisibility"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000727DF"
+        }
+      ]
+    },
+    {
+      "name": "Lyretail Anthias",
+      "effects": [
+        "Restore Magicka",
+        "Fortify Alteration",
+        "Fortify Conjuration",
+        "Fortify Carry Weight"
+      ],
+      "formids": [
+        {
+          "plugin": "ccBGSSSE001-Fish.esm",
+          "objectID": "0x000008F1"
+        }
+      ]
+    },
+    {
+      "name": "Marshmerrow",
+      "effects": [
+        "Restore Health",
+        "Fortify Carry Weight",
+        "Weakness to Magic",
+        "Damage Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000814"
+        }
+      ]
+    },
+    {
+      "name": "Minotaur Horn",
+      "effects": [
+        "Resist Poison",
+        "Damage Magicka Regen",
+        "Regenerate Health",
+        "Regenerate Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000815"
+        }
+      ]
+    },
+    {
+      "name": "Moon Sugar",
+      "effects": [
+        "Weakness to Fire",
+        "Resist Frost",
+        "Restore Magicka",
+        "Regenerate Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000D8E3F"
+        }
+      ]
+    },
+    {
+      "name": "Mora Tapinella",
+      "effects": [
+        "Restore Magicka",
+        "Lingering Damage Health",
+        "Regenerate Stamina",
+        "Fortify Illusion"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000EC870"
+        }
+      ]
+    },
+    {
+      "name": "Mort Flesh",
+      "effects": [
+        "Damage Health",
+        "Damage Magicka",
+        "Damage Magicka Regen",
+        "Frenzy"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse003-zombies.esl",
+          "objectID": "0x0000080C"
+        }
+      ]
+    },
+    {
+      "name": "Mudcrab Chitin",
+      "effects": [
+        "Restore Stamina",
+        "Cure Disease",
+        "Resist Poison",
+        "Resist Fire"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006BC00"
+        }
+      ]
+    },
+    {
+      "name": "Namira's Rot",
+      "effects": [
+        "Damage Magicka",
+        "Fortify Lockpicking",
+        "Fear",
+        "Regenerate Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0004DA24"
+        }
+      ]
+    },
+    {
+      "name": "Netch Jelly",
+      "effects": [
+        "Paralysis",
+        "Fortify Carry Weight",
+        "Restore Stamina",
+        "Fear"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x0001CD72"
+        }
+      ]
+    },
+    {
+      "name": "Nightshade",
+      "effects": [
+        "Damage Health",
+        "Damage Magicka Regen",
+        "Lingering Damage Stamina",
+        "Fortify Destruction"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0002F44C"
+        }
+      ]
+    },
+    {
+      "name": "Nightshade (Bloodchill Manor)",
+      "effects": [
+        "Damage Health",
+        "Damage Magicka Regen",
+        "Lingering Damage Stamina",
+        "Fortify Destruction"
+      ],
+      "formids": [
+        {
+          "plugin": "cceejsse005-cave.esm",
+          "objectID": "0x00042A61"
+        }
+      ]
+    },
+    {
+      "name": "Nirnroot",
+      "effects": [
+        "Damage Health",
+        "Damage Stamina",
+        "Invisibility",
+        "Resist Magic"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00059B86"
+        }
+      ]
+    },
+    {
+      "name": "Nordic Barnacle",
+      "effects": [
+        "Damage Magicka",
+        "Waterbreathing",
+        "Regenerate Health",
+        "Fortify Pickpocket"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0007EDF5"
+        }
+      ]
+    },
+    {
+      "name": "Ogre's Teeth",
+      "effects": [
+        "Weakness to Shock",
+        "Resist Poison",
+        "Lingering Damage Magicka",
+        "Regenerate Health"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000816"
+        }
+      ]
+    },
+    {
+      "name": "Orange Dartwing",
+      "effects": [
+        "Restore Stamina",
+        "Ravage Magicka",
+        "Fortify Pickpocket",
+        "Lingering Damage Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000BB956"
+        }
+      ]
+    },
+    {
+      "name": "Pearl",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Block",
+        "Restore Magicka",
+        "Resist Shock"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000854FE"
+        }
+      ]
+    },
+    {
+      "name": "Pearlfish",
+      "effects": [
+        "Restore Stamina",
+        "Resist Frost",
+        "Fortify Smithing",
+        "Fortify One-handed"
+      ],
+      "formids": [
+        {
+          "plugin": "ccBGSSSE001-Fish.esm",
+          "objectID": "0x000008EC"
+        }
+      ]
+    },
+    {
+      "name": "Pine Thrush Egg",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Lockpicking",
+        "Weakness to Poison",
+        "Resist Shock"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00023D6F"
+        }
+      ]
+    },
+    {
+      "name": "Poison Bloom",
+      "effects": [
+        "Damage Health",
+        "Slow",
+        "Fortify Carry Weight",
+        "Fear"
+      ],
+      "formids": [
+        {
+          "plugin": "Dawnguard.esm",
+          "objectID": "0x000185FB"
+        }
+      ]
+    },
+    {
+      "name": "Powdered Mammoth Tusk",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Sneak",
+        "Weakness to Fire",
+        "Fear"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006BC10"
+        }
+      ]
+    },
+    {
+      "name": "Purple Butterfly Wing",
+      "effects": [
+        "Regenerate Health",
+        "Regenerate Magicka",
+        "Regenerate Stamina",
+        "Paralysis"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse025-advdsgs.esm",
+          "objectID": "0x00059153"
+        }
+      ]
+    },
+    {
+      "name": "Purple Mountain Flower",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Sneak",
+        "Lingering Damage Magicka",
+        "Resist Frost"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00077E1E"
+        }
+      ]
+    },
+    {
+      "name": "Pygmy Sunfish",
+      "effects": [
+        "Restore Stamina",
+        "Lingering Damage Magicka",
+        "Damage Magicka Regen",
+        "Fortify Restoration"
+      ],
+      "formids": [
+        {
+          "plugin": "ccBGSSSE001-Fish.esm",
+          "objectID": "0x000008ED"
+        }
+      ]
+    },
+    {
+      "name": "Red Kelp Gas Bladder",
+      "effects": [
+        "Regenerate Stamina",
+        "Waterbreathing",
+        "Cure Disease",
+        "Fortify Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000817"
+        }
+      ]
+    },
+    {
+      "name": "Red Mountain Flower",
+      "effects": [
+        "Restore Magicka",
+        "Ravage Magicka",
+        "Fortify Magicka",
+        "Damage Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00077E1D"
+        }
+      ]
+    },
+    {
+      "name": "Redwort Flower",
+      "effects": [
+        "Resist Frost",
+        "Cure Poison",
+        "Damage Health",
+        "Invisibility"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000818"
+        }
+      ]
+    },
+    {
+      "name": "River Betty",
+      "effects": [
+        "Damage Health",
+        "Fortify Alteration",
+        "Slow",
+        "Fortify Carry Weight"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00106E1A"
+        }
+      ]
+    },
+    {
+      "name": "Rock Warbler Egg",
+      "effects": [
+        "Restore Health",
+        "Fortify One-handed",
+        "Damage Stamina",
+        "Weakness to Magic"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0007E8C8"
+        }
+      ]
+    },
+    {
+      "name": "Roobrush",
+      "effects": [
+        "Weakness to Magic",
+        "Fortify Sneak",
+        "Lingering Damage Health",
+        "Cure Poison"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000819"
+        }
+      ]
+    },
+    {
+      "name": "Rot Scale",
+      "effects": [
+        "Slow",
+        "Lingering Damage Health",
+        "Fear",
+        "Paralysis"
+      ],
+      "formids": [
+        {
+          "plugin": "Update.esm",
+          "objectID": "0x0000306D"
+        }
+      ]
+    },
+    {
+      "name": "Sabre Cat Tooth",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Heavy Armor",
+        "Fortify Smithing",
+        "Weakness to Poison"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006BC04"
+        }
+      ]
+    },
+    {
+      "name": "Salmon Roe",
+      "effects": [
+        "Restore Stamina",
+        "Waterbreathing",
+        "Fortify Magicka",
+        "Regenerate Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "HearthFires.esm",
+          "objectID": "0x00003545"
+        }
+      ]
+    },
+    {
+      "name": "Salt Pile",
+      "effects": [
+        "Weakness to Magic",
+        "Fortify Restoration",
+        "Slow",
+        "Regenerate Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00034CDF"
+        }
+      ]
+    },
+    {
+      "name": "Saltrice",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Magicka",
+        "Damage Stamina Regen",
+        "Restore Health"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000081A"
+        }
+      ]
+    },
+    {
+      "name": "Scalon Fin",
+      "effects": [
+        "Waterbreathing",
+        "Damage Health",
+        "Lingering Damage Magicka",
+        "Damage Magicka Regen"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000081B"
+        }
+      ]
+    },
+    {
+      "name": "Scaly Pholiota",
+      "effects": [
+        "Weakness to Magic",
+        "Fortify Illusion",
+        "Regenerate Stamina",
+        "Fortify Carry Weight"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006F950"
+        }
+      ]
+    },
+    {
+      "name": "Scathecraw",
+      "effects": [
+        "Ravage Health",
+        "Ravage Stamina",
+        "Ravage Magicka",
+        "Lingering Damage Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x00017E97"
+        }
+      ]
+    },
+    {
+      "name": "Screaming Maw",
+      "effects": [
+        "Regenerate Magicka",
+        "Fortify Alteration",
+        "Invisibility",
+        "Regenerate Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Update.esm",
+          "objectID": "0x0000306E"
+        }
+      ]
+    },
+    {
+      "name": "Scrib Jelly",
+      "effects": [
+        "Regenerate Magicka",
+        "Cure Poison",
+        "Cure Disease",
+        "Regenerate Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000081C"
+        }
+      ]
+    },
+    {
+      "name": "Scrib Jerky",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Stamina",
+        "Paralysis",
+        "Waterbreathing"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000081D"
+        }
+      ]
+    },
+    {
+      "name": "Silverside Perch",
+      "effects": [
+        "Restore Stamina",
+        "Damage Stamina Regen",
+        "Ravage Health",
+        "Resist Frost"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00106E1C"
+        }
+      ]
+    },
+    {
+      "name": "Simon Rodayne's Heart",
+      "effects": [
+        "Damage Health",
+        "Damage Magicka",
+        "Damage Magicka Regen",
+        "Frenzy"
+      ],
+      "formids": [
+        {
+          "plugin": "ccedhsse002-splkntset.esl",
+          "objectID": "0x0000085D"
+        }
+      ]
+    },
+    {
+      "name": "Skeever Tail",
+      "effects": [
+        "Damage Stamina Regen",
+        "Ravage Health",
+        "Damage Health",
+        "Fortify Light Armor"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD6F"
+        }
+      ]
+    },
+    {
+      "name": "Slaughterfish Egg",
+      "effects": [
+        "Resist Poison",
+        "Fortify Pickpocket",
+        "Lingering Damage Health",
+        "Fortify Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0007E8C5"
+        }
+      ]
+    },
+    {
+      "name": "Slaughterfish Scales",
+      "effects": [
+        "Resist Frost",
+        "Lingering Damage Health",
+        "Fortify Heavy Armor",
+        "Fortify Block"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD70"
+        }
+      ]
+    },
+    {
+      "name": "Sload Soap",
+      "effects": [
+        "Resist Fire",
+        "Fear",
+        "Fortify Conjuration",
+        "Fortify Alteration"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000081E"
+        }
+      ]
+    },
+    {
+      "name": "Small Antlers",
+      "effects": [
+        "Weakness to Poison",
+        "Fortify Restoration",
+        "Lingering Damage Stamina",
+        "Damage Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006BC0B"
+        }
+      ]
+    },
+    {
+      "name": "Small Pearl",
+      "effects": [
+        "Restore Stamina",
+        "Fortify One-handed",
+        "Fortify Restoration",
+        "Resist Frost"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00085500"
+        }
+      ]
+    },
+    {
+      "name": "Snowberries",
+      "effects": [
+        "Resist Fire",
+        "Fortify Enchanting",
+        "Resist Frost",
+        "Resist Shock"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0001B3BD"
+        }
+      ]
+    },
+    {
+      "name": "Spadefish",
+      "effects": [
+        "Restore Health",
+        "Fortify Lockpicking",
+        "Fortify Pickpocket",
+        "Cure Disease"
+      ],
+      "formids": [
+        {
+          "plugin": "ccBGSSSE001-Fish.esm",
+          "objectID": "0x000008F3"
+        }
+      ]
+    },
+    {
+      "name": "Spawn Ash",
+      "effects": [
+        "Ravage Stamina",
+        "Resist Fire",
+        "Fortify Enchanting",
+        "Ravage Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x0001CD6D"
+        }
+      ]
+    },
+    {
+      "name": "Spiddal Stick",
+      "effects": [
+        "Damage Health",
+        "Damage Magicka",
+        "Weakness to Fire",
+        "Restore Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse067-daedinv.esm",
+          "objectID": "0x00024C15"
+        }
+      ]
+    },
+    {
+      "name": "Spider Egg",
+      "effects": [
+        "Damage Stamina",
+        "Damage Magicka Regen",
+        "Fortify Lockpicking",
+        "Fortify Marksman"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0009151B"
+        }
+      ]
+    },
+    {
+      "name": "Spriggan Sap",
+      "effects": [
+        "Damage Magicka Regen",
+        "Fortify Enchanting",
+        "Fortify Smithing",
+        "Fortify Alteration"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x00063B5F"
+        }
+      ]
+    },
+    {
+      "name": "Steel-Blue Entoloma",
+      "effects": [
+        "Restore Magicka",
+        "Fortify Destruction",
+        "Resist Frost",
+        "Fortify Carry Weight"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse040-advobgobs.esl",
+          "objectID": "0x00000832"
+        }
+      ]
+    },
+    {
+      "name": "Stoneflower Petals",
+      "effects": [
+        "Weakness to Shock",
+        "Fortify One-handed",
+        "Fortify Magicka",
+        "Fortify Enchanting"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x0000081F"
+        }
+      ]
+    },
+    {
+      "name": "Swamp Fungal Pod",
+      "effects": [
+        "Resist Shock",
+        "Lingering Damage Magicka",
+        "Paralysis",
+        "Restore Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0007E8B7"
+        }
+      ]
+    },
+    {
+      "name": "Taproot",
+      "effects": [
+        "Weakness to Magic",
+        "Fortify Illusion",
+        "Regenerate Magicka",
+        "Restore Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD71"
+        }
+      ]
+    },
+    {
+      "name": "Thistle Branch",
+      "effects": [
+        "Resist Frost",
+        "Ravage Stamina",
+        "Resist Poison",
+        "Fortify Heavy Armor"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x000134AA"
+        }
+      ]
+    },
+    {
+      "name": "Thorn Hook",
+      "effects": [
+        "Lingering Damage Health",
+        "Paralysis",
+        "Regenerate Magicka",
+        "Regenerate Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Update.esm",
+          "objectID": "0x0000306F"
+        }
+      ]
+    },
+    {
+      "name": "Torchbug Thorax",
+      "effects": [
+        "Restore Stamina",
+        "Lingering Damage Magicka",
+        "Weakness to Magic",
+        "Fortify Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0004DA73"
+        }
+      ]
+    },
+    {
+      "name": "Trama Root",
+      "effects": [
+        "Weakness to Shock",
+        "Fortify Carry Weight",
+        "Damage Magicka",
+        "Slow"
+      ],
+      "formids": [
+        {
+          "plugin": "Dragonborn.esm",
+          "objectID": "0x00017008"
+        }
+      ]
+    },
+    {
+      "name": "Troll Fat",
+      "effects": [
+        "Resist Poison",
+        "Fortify Two-handed",
+        "Frenzy",
+        "Damage Health"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD72"
+        }
+      ]
+    },
+    {
+      "name": "Tundra Cotton",
+      "effects": [
+        "Resist Magic",
+        "Fortify Magicka",
+        "Fortify Block",
+        "Fortify Barter"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003F7F8"
+        }
+      ]
+    },
+    {
+      "name": "Vampire Dust",
+      "effects": [
+        "Invisibility",
+        "Restore Magicka",
+        "Regenerate Health",
+        "Cure Disease"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD76"
+        }
+      ]
+    },
+    {
+      "name": "Void Essence",
+      "effects": [
+        "Restore Health",
+        "Fortify Health",
+        "Fortify Stamina",
+        "Regenerate Health"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000820"
+        }
+      ]
+    },
+    {
+      "name": "Void Salts",
+      "effects": [
+        "Weakness to Shock",
+        "Resist Magic",
+        "Damage Health",
+        "Fortify Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0003AD60"
+        }
+      ]
+    },
+    {
+      "name": "Watcher's Eye",
+      "effects": [
+        "Night Eye",
+        "Fortify Magicka",
+        "Fortify Illusion",
+        "Spell Absorption"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000821"
+        }
+      ]
+    },
+    {
+      "name": "Wheat",
+      "effects": [
+        "Restore Health",
+        "Fortify Health",
+        "Damage Stamina Regen",
+        "Lingering Damage Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0004B0BA"
+        }
+      ]
+    },
+    {
+      "name": "White Cap",
+      "effects": [
+        "Weakness to Frost",
+        "Fortify Heavy Armor",
+        "Restore Magicka",
+        "Ravage Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0004DA22"
+        }
+      ]
+    },
+    {
+      "name": "Wild Grass Pod",
+      "effects": [
+        "Resist Poison",
+        "Ravage Magicka",
+        "Fortify Alteration",
+        "Restore Magicka"
+      ],
+      "formids": [
+        {
+          "plugin": "cctwbsse001-puzzledungeon.esm",
+          "objectID": "0x00019D3A"
+        }
+      ]
+    },
+    {
+      "name": "Wisp Stalk Caps",
+      "effects": [
+        "Damage Health",
+        "Weakness to Poison",
+        "Frenzy",
+        "Regenerate Stamina"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000823"
+        }
+      ]
+    },
+    {
+      "name": "Wisp Wrappings",
+      "effects": [
+        "Restore Stamina",
+        "Fortify Destruction",
+        "Fortify Carry Weight",
+        "Resist Magic"
+      ],
+      "formids": [
+        {
+          "plugin": "Skyrim.esm",
+          "objectID": "0x0006BC0E"
+        }
+      ]
+    },
+    {
+      "name": "Withering Moon",
+      "effects": [
+        "Restore Magicka",
+        "Spell Absorption",
+        "Fortify Light Armor",
+        "Cure Disease"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000824"
+        }
+      ]
+    },
+    {
+      "name": "Worm's Head Cap",
+      "effects": [
+        "Fortify Lockpicking",
+        "Night Eye",
+        "Fortify Carry Weight",
+        "Slow"
+      ],
+      "formids": [
+        {
+          "plugin": "ccbgssse037-curios.esl",
+          "objectID": "0x00000825"
+        }
+      ]
+    },
+    {
+      "name": "Yellow Mountain Flower",
+      "effects": [
+        "Resist Poison",
+        "Fortify Restoration",
+        "Fortify Health",
+        "Damage Stamina Regen"
+      ],
+      "formids": [
+        {
+          "plugin": "Dawnguard.esm",
+          "objectID": "0x00002A78"
+        }
+      ]
+    }
+  ]
+}
