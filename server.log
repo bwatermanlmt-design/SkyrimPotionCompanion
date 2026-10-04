@@ -1,0 +1,23 @@
+[http] "GET / HTTP/1.1" 200 -
+[http] "GET / HTTP/1.1" 200 -
+warning: ACHR body has 13831 trailing bytes after parse (ignored)
+[http] "GET /api/data HTTP/1.1" 200 -
+[http] "GET / HTTP/1.1" 200 -
+warning: ACHR body has 13831 trailing bytes after parse (ignored)
+[http] "GET /api/data HTTP/1.1" 200 -
+warning: ACHR body has 13831 trailing bytes after parse (ignored)
+[http] "GET /api/data HTTP/1.1" 200 -
+[http] "GET / HTTP/1.1" 200 -
+warning: ACHR body has 13831 trailing bytes after parse (ignored)
+[http] "GET /api/data HTTP/1.1" 200 -
+[http] "GET / HTTP/1.1" 200 -
+warning: ACHR body has 13831 trailing bytes after parse (ignored)
+[http] "GET /api/data HTTP/1.1" 200 -
+[http] "GET / HTTP/1.1" 200 -
+[http] code 404, message not found
+[http] "GET /favicon.ico HTTP/1.1" 404 -
+warning: ACHR body has 13831 trailing bytes after parse (ignored)
+[http] "GET /api/data HTTP/1.1" 200 -
+warning: ACHR body has 13831 trailing bytes after parse (ignored)
+[http] "GET /api/data HTTP/1.1" 200 -
+[http] "GET / HTTP/1.1" 200 -
