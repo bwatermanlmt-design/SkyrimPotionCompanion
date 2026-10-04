@@ -681,11 +681,14 @@ def parse_achr_inventory(
         except (SaveParseError, IndexError, ValueError):
             pass
 
-    # 10. trailing bytes: hard error only if we parsed the full inventory.
-    # (Tolerant mode may stop early on unknown extra-data types.)
+    # 10. trailing bytes: the game writes more data after the animation blob
+    # than ReSaver models (extra animation-graph state; 5KB-14KB observed
+    # varying save to save, even on a fresh intro-cart save). The inventory
+    # above parsed cleanly, so tolerate the tail instead of failing the
+    # whole refresh -- this is a companion app, not a save editor.
     if cur.remaining() and len(raw_items) == expected:
-        raise SaveParseError(
-            "ACHR body has %d trailing bytes after parse" % cur.remaining())
+        print("warning: ACHR body has %d trailing bytes after parse "
+              "(ignored)" % cur.remaining(), file=sys.stderr)
     return raw_items
 
 
