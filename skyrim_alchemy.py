@@ -692,6 +692,130 @@ def parse_achr_inventory(
     return raw_items
 
 
+# ---------------------------------------------------------------------------
+# Merchant chests: shop inventory from the save
+# ---------------------------------------------------------------------------
+# Map from save-header location name -> merchant chest formID (Skyrim.esm).
+# Chest formIDs verified empirically from Ben's saves (2026-10-03).
+# Add more shops as he visits them.
+MERCHANT_CHESTS = {
+    "Arcadia's Cauldron": 0x0009CD46,  # Arcadia (apothecary, Whiterun)
+}
+
+# REFR change-flag bits that trigger the actor-level EXTRADATA section
+# (ReSaver ChangeFormRefr.java).
+_REFR_EXTRADATA_BITS = (6, 12, 29, 31, 11, 17, 25, 26, 10)
+_REFR_EXTRADATA_MASK = sum(1 << b for b in _REFR_EXTRADATA_BITS)
+
+
+def parse_refr_inventory(data: bytes, change_flags: int,
+                         refid_kind: int) -> List[Tuple[Tuple[int, int, int], int]]:
+    """Walk a REFR (container) change-data body; return [((b0,b1,b2), count)].
+
+    Section order per ReSaver's ChangeFormRefr.java. Simpler than ACHR:
+    no animation blob, no actor-level sections.
+    """
+    cur = Cursor(data, 0)
+
+    # 1. initial data (same type derivation as ACHR).
+    if refid_kind == 2:      # CREATED
+        initial_type = 5
+    elif change_flags & ((1 << 25) | (1 << 3)):  # PROMOTED | CELL_CHANGED
+        initial_type = 6
+    elif change_flags & ((1 << 2) | (1 << 1)):    # HAVOK_MOVE | MOVE
+        initial_type = 4
+    else:
+        initial_type = 0
+    if initial_type not in _INITIAL_DATA_SIZES:
+        raise SaveParseError("bad REFR initialType %d" % initial_type)
+    cur.skip(_INITIAL_DATA_SIZES[initial_type])
+
+    # 2. havok blob.
+    if change_flags & (1 << 2):
+        cur.skip(_read_vsval(cur))
+
+    # 3-5. conditional fixed sections (no always-present block for REFR).
+    if change_flags & (1 << 0):
+        cur.skip(6)          # ChangeFormFlags
+    if change_flags & (1 << 7):
+        cur.skip(3)          # RefID base object
+    if change_flags & (1 << 4):
+        cur.skip(4)          # float32 scale
+
+    # 6. extra data.
+    if change_flags & _REFR_EXTRADATA_MASK:
+        _skip_extradata(cur)
+
+    # 7. inventory.
+    raw_items = []
+    if change_flags & ((1 << 5) | (1 << 27)):
+        expected = _read_vsval(cur)
+        for _ in range(expected):
+            try:
+                b0, b1, b2 = cur.u8(), cur.u8(), cur.u8()
+                count = cur.i32()
+                _skip_extradata(cur)
+                raw_items.append(((b0, b1, b2), count))
+            except (SaveParseError, IndexError):
+                break
+    # 8. promotion data (RefID array) -- skip if present.
+    if change_flags & (1 << 25):
+        for _ in range(_read_vsval(cur)):
+            cur.skip(3)
+    return raw_items
+
+
+def extract_merchant_inventory(path: str, location: str
+                               ) -> List[Tuple[int, int]]:
+    """Get the merchant chest inventory for the given location name.
+
+    Returns [(item formID, count)] or [] if no chest is mapped / found.
+    """
+    chest_fid = MERCHANT_CHESTS.get(location)
+    if chest_fid is None:
+        return []
+    import zlib
+    body, _info, flt_base = load_decompressed(path)
+    cur = Cursor(body, 0)
+    cur.u8()  # form version
+    cur.u32()  # plugin info size
+    for _ in range(cur.u8()):
+        cur.wstring()
+    for _ in range(cur.u16()):
+        cur.wstring()
+    # file location table
+    formid_array_off = cur.u32() - flt_base
+    cur.skip(3 * 4)  # unknown, global1, global2
+    change_forms_off = cur.u32() - flt_base
+    cur.skip(4)  # global3
+    cur.skip(3 * 4)  # table counts
+    change_form_count = cur.u32()
+    cur.skip(15 * 4)  # unused
+    fc = Cursor(body, formid_array_off)
+    formid_array = [fc.u32() for _ in range(fc.u32())]
+    cc = Cursor(body, change_forms_off)
+    for _ in range(change_form_count):
+        b0, b1, b2 = cc.u8(), cc.u8(), cc.u8()
+        change_flags = cc.u32()
+        type_byte = cc.u8()
+        _ver = cc.u8()
+        size_class = type_byte >> 6
+        if size_class == 0:
+            length1, length2 = cc.u8(), cc.u8()
+        elif size_class == 1:
+            length1, length2 = cc.u16(), cc.u16()
+        else:
+            length1, length2 = cc.u32(), cc.u32()
+        data = cc.raw(length1)
+        if length2:
+            data = zlib.decompress(data)
+        if resolve_refid(b0, b1, b2, formid_array) == chest_fid:
+            raw = parse_refr_inventory(data, change_flags, b0 >> 6)
+            return [(resolve_refid(x0, x1, x2, formid_array), count)
+                    for (x0, x1, x2), count in raw]
+    return []
+
+
 def extract_player_inventory(
         path: str) -> Tuple[List[Tuple[int, int]], dict, List[str], List[str]]:
     """Parse a save.
@@ -945,6 +1069,94 @@ def compute_potions(owned: List[dict]) -> List[dict]:
     return potions
 
 
+def shop_recommendations(owned: List[dict], chest_items: List[Tuple[str, int, int]],
+                         player_gold: int, ing_db: dict) -> List[dict]:
+    """Build a greedy buy-and-brew plan.
+
+    owned: Ben's ingredient dicts (name, effects, count).
+    chest_items: [(ingredient name, base_value, count_available)] from the
+        merchant chest.
+    ing_db: name -> ingredient dict (for effects of items Ben doesn't own).
+    Returns an ordered plan: [{name, available, buy_price, brew_with,
+    potion_effects, potion_price}]. Each step buys one unit, brews the best
+    potion using it, and consumes the ingredients so later steps use what's
+    left. This simulates the actual buy-brew-sell loop instead of evaluating
+    each ingredient in isolation (which double-counts shared ingredients).
+    Buy price ~= base_value x 3 (typical low-Speech merchant markup).
+    """
+    # Working inventory (mutable counts).
+    pool = {o["name"]: {"effects": o["effects"], "count": o["count"]}
+            for o in owned}
+    gold = player_gold
+    plan = []
+    # Rank chest ingredients by their best standalone potion value first,
+    # so the plan goes in a sensible buy order.
+    ranked = []
+    for name, base_value, avail in chest_items:
+        if avail <= 0:
+            continue
+        buy_price = base_value * 3
+        # Hypothetical best potion if we had one unit.
+        hypo_effects = None
+        if name in pool:
+            hypo_effects = pool[name]["effects"]
+        elif name in ing_db:
+            hypo_effects = ing_db[name]["effects"]
+        if not hypo_effects:
+            continue
+        tmp = dict(pool)
+        tmp[name] = {"effects": hypo_effects,
+                     "count": tmp.get(name, {"count": 0})["count"] + 1}
+        tmp_list = [{"name": n, "effects": v["effects"], "count": v["count"]}
+                    for n, v in tmp.items() if v["count"] > 0]
+        best = None
+        for p in compute_potions(tmp_list):
+            if name in p["ingredients"]:
+                best = p
+                break
+        if best and best["price"] >= 100:
+            ranked.append((best["price"], name, base_value, avail, best))
+    ranked.sort(reverse=True)
+    # Greedy: buy in order, brew, consume.
+    for _, name, base_value, avail, _ in ranked:
+        buy_price = base_value * 3
+        if buy_price > gold:
+            continue
+        # Add one unit to the pool.
+        if name in pool:
+            pool[name]["count"] += 1
+        elif name in ing_db:
+            pool[name] = {"effects": ing_db[name]["effects"], "count": 1}
+        else:
+            continue
+        pool_list = [{"name": n, "effects": v["effects"], "count": v["count"]}
+                     for n, v in pool.items() if v["count"] > 0]
+        best = None
+        for p in compute_potions(pool_list):
+            if name in p["ingredients"]:
+                best = p
+                break
+        if best is None:
+            pool[name]["count"] -= 1
+            continue
+        # Consume the brewed ingredients.
+        for ing_name in best["ingredients"]:
+            pool[ing_name]["count"] -= 1
+        gold -= buy_price
+        # What did we brew it with (excluding the bought ingredient)?
+        brew_with = [i for i in best["ingredients"] if i != name]
+        plan.append({
+            "name": name,
+            "available": avail,
+            "buy_price": buy_price,
+            "brew_with": brew_with,
+            "potion_effects": best["effects"],
+            "potion_price": best["price"],
+            "gold_left": gold,
+        })
+    return plan
+
+
 # ---------------------------------------------------------------------------
 # HTTP server + mobile web UI
 # ---------------------------------------------------------------------------
@@ -1098,6 +1310,12 @@ PAGE_HTML = """<!DOCTYPE html>
 </nav>
 
 <main>
+  <section id="shop" style="display:none">
+    <h2 id="shop-h">Shop buys</h2>
+    <div class="hint" id="shop-hint"></div>
+    <div id="shoprecs"></div>
+  </section>
+
   <section id="tab-price" class="tab active">
     <div class="controls">
       <input id="search" type="search" placeholder="Filter: effect or ingredient&hellip;" autocomplete="off">
@@ -1446,6 +1664,35 @@ function fillIngredientFilter() {
   sel.value = cur;
 }
 
+function renderShop() {
+  const shop = S.data.shop;
+  const sec = $("shop");
+  if (!shop || !shop.recommendations.length) {
+    sec.style.display = "none";
+    return;
+  }
+  sec.style.display = "";
+  $("shop-h").textContent = "Buy at " + shop.location + " (" + shop.gold + "g)";
+  $("shop-hint").textContent =
+    "Buy in order, brew each with what's listed, sell, repeat. " +
+    "Ingredients are consumed as you go. Prices are estimates.";
+  const div = $("shoprecs");
+  div.innerHTML = "";
+  const tbl = document.createElement("table");
+  tbl.innerHTML = "<tr><th>#</th><th>Buy</th><th>Cost</th><th>Brew with</th><th>Makes</th></tr>";
+  shop.recommendations.slice(0, 20).forEach((r, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + (i + 1) + "</td>" +
+      "<td>" + r.name + (r.available > 1 ? " x" + r.available : "") + "</td>" +
+      "<td>" + r.buy_price + "g</td>" +
+      "<td>" + (r.brew_with.join(" + ") || "&mdash;") + "</td>" +
+      "<td>" + r.potion_effects.join(", ") + " (" + r.potion_price + "g)</td>";
+    tbl.appendChild(tr);
+  });
+  div.appendChild(tbl);
+}
+
 function renderAll() {
   renderStatus();
   renderQueue();
@@ -1453,6 +1700,7 @@ function renderAll() {
   renderPriceTab();
   renderEffectTab();
   renderIngredients();
+  renderShop();
 }
 
 function setTab(which) {
@@ -1526,6 +1774,7 @@ class CompanionState:
     def __init__(self, saves_dir: str, db_path: str):
         self.saves_dir = saves_dir
         self.lookup, self.ingredients = load_ingredient_db(db_path)
+        self.ing_db = {ing["name"]: ing for ing in self.ingredients}
         self.lock = threading.Lock()
         self.last_good = None
 
@@ -1544,6 +1793,34 @@ class CompanionState:
         owned = inventory_to_ingredients(raw_items, plugins, light_plugins,
                                          self.lookup)
         potions = compute_potions(owned)
+        # Shop recommendations: if we're in a mapped shop, check the
+        # merchant's chest for profitable buys.
+        shop = None
+        location = info.get("playerLocation", "")
+        if location in MERCHANT_CHESTS:
+            gold = next((c for f, c in raw_items if f == 0xF), 0)
+            chest_raw = extract_merchant_inventory(save_path, location)
+            chest_items = []
+            for fid, cnt in chest_raw:
+                plugin, obj_id = split_formid(fid, plugins, light_plugins)
+                if plugin is None or cnt <= 0:
+                    continue
+                ing = self.lookup.get((plugin.lower(), obj_id))
+                if ing is None:
+                    continue
+                chest_items.append((ing["name"], ing.get("base_value", 5),
+                                    cnt))
+            # Dedupe by name (chest may list same ingredient twice).
+            seen = {}
+            for name, bv, cnt in chest_items:
+                if name in seen:
+                    seen[name] = (name, bv, seen[name][2] + cnt)
+                else:
+                    seen[name] = (name, bv, cnt)
+            recs = shop_recommendations(owned, list(seen.values()), gold,
+                                        self.ing_db)
+            shop = {"location": location, "gold": gold,
+                    "recommendations": recs}
         payload = {
             "ok": True,
             "save_name": os.path.basename(save_path),
@@ -1553,6 +1830,7 @@ class CompanionState:
             "player": info.get("playerName", "?"),
             "ingredients": owned,
             "potions": potions,
+            "shop": shop,
         }
         with self.lock:
             self.last_good = payload
