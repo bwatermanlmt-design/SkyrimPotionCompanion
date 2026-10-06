@@ -110,10 +110,17 @@ If it can't find them, it will tell you where it looked — use
   **"Add python.exe to PATH"** is checked during installation.
 - **Page shows no ingredients** — quicksave in-game with F5 first, then
   tap Refresh. The app reads saves, not your live game memory.
-- **A save fails to parse** — the parser is strict about the save format
-  but tolerant about unknown data: it will use every ingredient it could
-  read. If you get a hard error, please report it (see below) and attach
-  which save type it was (Quicksave/Autosave/manual).
+- **A save fails to parse** — the parser is tolerant about unknown data:
+  it skips unparseable inventory entries and uses everything it could
+  read (useful for modded saves or exploit-heavy characters). If you get
+  a hard error, please report it (see below) and attach which save type
+  it was (Quicksave/Autosave/manual).
+
+## Stopping the app
+
+When you're done, tap the **⏹ Quit** button in the header. This stops
+the server — you can close the browser tab. (There's no background
+service; the app only runs while you have it open.)
 
 ## How it works (short version)
 
@@ -121,9 +128,20 @@ Skyrim save files (`.ess`) are LZ4-compressed. The app decompresses your
 save, walks the change-list to your player character's inventory, matches
 each item against a built-in database of 191 alchemy ingredients
 (including Anniversary Edition creations), computes every valid 2- and
-3-ingredient combination, prices each with standard effect values, and
-serves the result as a phone-friendly web page. Everything runs locally —
-your save never leaves your machine.
+3-ingredient combination, prices each with your Alchemy skill and perks,
+and serves the result as a phone-friendly web page. Everything runs
+locally — your save never leaves your machine.
+
+**Auto-detection:** The app reads your base Alchemy skill (from the NPC
+record), your alchemy perks (Alchemist ranks, Benefactor, Poisoner,
+Physician, Purity), your discovered ingredient effects, and your known
+enchantments directly from the save. Enchantment names come from a
+built-in database plus FormID mappings extracted from Skyrim.esm.
+
+**Robust parsing:** The save parser tolerates unusual data — if an
+inventory entry can't be parsed (modded items, exploit-duplicated
+stacks), it skips that entry and continues with the rest rather than
+failing entirely.
 
 ## Files
 
