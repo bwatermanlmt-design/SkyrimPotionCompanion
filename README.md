@@ -25,13 +25,24 @@ make with what's left.
   gold total.
 - **By Effect tab** — prefer shopping by effect instead of price? Pick an
   effect and see every recipe that produces it, richest first.
+- **Discover tab** — ingredients are highlighted when brewing them would
+  reveal a new alchemy effect you haven't discovered yet.
+- **Shop tab** — a smart shopping list: what to buy (and what to skip)
+  based on your current inventory and the most valuable potions you can
+  brew. Gold-aware: plans purchases in phases so you buy, brew, sell,
+  and return with more gold.
+- **Enchantments tab** — lists all enchantments you've learned via
+  disenchanting, auto-detected from your save.
+- **Alchemy skill & perks** — potion values account for your Alchemy
+  skill and perks (Alchemist ranks, Benefactor, Poisoner, Physician).
+  Base skill and perks are auto-detected from your save; override them
+  manually for what-if comparisons.
 - **Live inventory** — hit *Refresh* after quicksaving (F5) and the page
   re-reads your save.
 
-Potion values use standard alchemy values (the baseline for 100 Alchemy
-with no perks). Your real sale prices will be higher or lower depending on
-your skill, perks, and gear — but the *ranking*, most-valuable-first, is
-what matters, and that barely moves.
+Potion values are calculated from your Alchemy skill and perks. The app
+auto-detects your base skill and perks from the save; you can adjust them
+manually to see how perk choices affect potion values.
 
 ## Requirements
 
@@ -51,7 +62,6 @@ address like this:
 
 ```
 On your phone (same WiFi), open:
-Your System's IP address and the port number, example:
     http://192.168.1.42:8123/
 ```
 
@@ -121,6 +131,9 @@ your save never leaves your machine.
 |---|---|
 | `skyrim_alchemy.py` | The whole app: save parser, potion math, web server |
 | `ingredients.json` | Ingredient database (names, effects, form IDs) |
+| `enchantment_names.json` | Known enchantment names (FormID → name) |
+| `esm_mappings.json` | FormID mappings from Skyrim.esm (auto-generated) |
+| `parse_esm.py` | Script to regenerate esm_mappings.json from Skyrim.esm |
 | `run.bat` / `run.sh` | Double-click launchers (Windows / Linux & macOS) |
 | `README.md` | This file |
 | `LICENSE` | MIT license |

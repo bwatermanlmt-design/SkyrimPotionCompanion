@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "version": 1,
+    "description": "Maps enchantment FormIDs to names. Built from disenchant experiments; resolved via Skyrim.esm (2026-10-05)."
+  },
+  "enchantments": {
+    "0x0010FB70": "Fortify Alchemy",
+    "0x0010FB72": "Fortify Block",
+    "0x0010FB7C": "Fortify Magicka",
+    "0x0010FB7E": "Fortify Archery",
+    "0x0010FB8F": "Resist Shock",
+    "0x0010FB94": "Fear",
+    "0x0010FB96": "Frost Damage",
+    "0x0010FB9A": "Soul Trap",
+    "0x0010FB7D": "Fortify Magicka Regen",
+    "0x0010FB8C": "Resist Frost",
+    "0x0010FB99": "Shock Damage"
+  }
+}

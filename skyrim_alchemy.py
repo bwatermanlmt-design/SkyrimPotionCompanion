@@ -56,11 +56,13 @@ import argparse
 import http.server
 import json
 import os
+import random
 import socket
 import struct
 import sys
 import threading
 import time
+import urllib.parse
 import zlib
 from typing import Dict, List, Optional, Tuple
 
@@ -597,6 +599,9 @@ def _skip_extradata_entry(cur: Cursor) -> None:
         cur.skip(n)
         cur.skip(9)
         return
+    if t == 64:    # ExtraEnchantment: RefID (3B) + u16 charge.
+        cur.skip(3 + 2)
+        return
     # Type 45 (LeveledCreature) embeds a full NPC parse -- not skippable.
     # Anything else is unknown to ReSaver too (it throws as well).
     raise SaveParseError("cannot skip extra-data entry type %d" % t)
@@ -611,7 +616,8 @@ def _skip_extradata(cur: Cursor) -> None:
 
 
 def parse_achr_inventory(
-        data: bytes, change_flags: int, refid_kind: int
+        data: bytes, change_flags: int, refid_kind: int,
+        formid_array: list = None
 ) -> List[Tuple[Tuple[int, int, int], int]]:
     """Walk a player ACHR change-data body; return [((b0,b1,b2), count)].
 
@@ -619,6 +625,10 @@ def parse_achr_inventory(
     RefID bytes to formIDs with resolve_refid(). Raises SaveParseError on any
     structural mismatch -- including trailing bytes, which ReSaver also
     treats as a hard error.
+
+    formid_array (optional): for resync validation on exploit saves.
+    (2026-10-05: the player has millions of non-stackable items via exploits;
+    some entries have unparseable extra data. Resync skips them.)
     """
     cur = Cursor(data, 0)
 
@@ -662,16 +672,58 @@ def parse_achr_inventory(
     if change_flags & ((1 << _F_INVENTORY) | (1 << _F_LEVELED_INVENTORY)):
         expected = _read_vsval(cur)
         for _ in range(expected):
+            item_start = cur.pos
             try:
                 b0, b1, b2 = cur.u8(), cur.u8(), cur.u8()
                 count = cur.i32()
                 _skip_extradata(cur)
                 raw_items.append(((b0, b1, b2), count))
-            except (SaveParseError, IndexError):
-                # Tolerant parse: stop at first unparseable item.
-                # (Real saves may contain complex extra-data types we don't
-                # handle yet; partial inventory is better than none.)
-                break
+            except (SaveParseError, IndexError, ValueError):
+                # Tolerant parse with resync (2026-10-05: exploit saves).
+                # Try to find the next valid item header within 2KB.
+                # A valid header: plausible RefID + i32 count + parseable extra data.
+                resynced = False
+                if formid_array is not None:
+                    search_end = min(item_start + 2048, len(data) - 8)
+                    for off in range(item_start + 1, search_end):
+                        try:
+                            tb0, tb1, tb2 = data[off], data[off+1], data[off+2]
+                            kind = tb0 >> 6
+                            if kind not in (0, 1, 2):
+                                continue
+                            if kind == 0:
+                                val = ((tb0 & 0x3F) << 16) | (tb1 << 8) | tb2
+                                if val == 0 or val - 1 >= len(formid_array):
+                                    continue
+                            # Trial parse: count + extra data
+                            tcur = Cursor(data, off + 3)
+                            tcur.i32()  # count
+                            # Peek extra data count (VSVal)
+                            epos = tcur.pos
+                            eb0 = tcur.u8()
+                            tag = eb0 & 0x03
+                            if tag == 0:
+                                ecount = eb0 >> 2
+                            elif tag == 1:
+                                ecount = (eb0 | (tcur.u8() << 8)) >> 2
+                            else:
+                                ecount = (eb0 | (tcur.u8() << 8) | (tcur.u8() << 16)) >> 2
+                            # Sanity: 0-20 entries is plausible
+                            if 0 <= ecount <= 20:
+                                # Found a plausible header; resync here
+                                cur.pos = off
+                                resynced = True
+                                break
+                        except (IndexError, ValueError):
+                            continue
+                if not resynced:
+                    # Could not resync; stop parsing (partial is better than none)
+                    break
+                # If resynced, the for loop continues and will retry parsing
+                # at the new position. But we've already consumed one iteration;
+                # decrement the loop counter by continuing (the range is fixed,
+                # so we might parse fewer than expected, which is fine).
+                continue
 
     # 9. animation blob (VSVal-counted). Only if we parsed the full inventory;
     # otherwise the cursor is misaligned and we skip it.
@@ -696,7 +748,7 @@ def parse_achr_inventory(
 # Merchant chests: shop inventory from the save
 # ---------------------------------------------------------------------------
 # Map from save-header location name -> merchant chest formID (Skyrim.esm).
-# Chest formIDs verified empirically from Ben's saves (2026-10-03).
+# Chest formIDs verified empirically from player saves (2026-10-03).
 # Add more shops as he visits them.
 MERCHANT_CHESTS = {
     "Arcadia's Cauldron": 0x0009CD46,  # Arcadia (apothecary, Whiterun)
@@ -887,13 +939,393 @@ def extract_player_inventory(
         fid = resolve_refid(b0, b1, b2, formid_array)
         if fid == PLAYER_FORMID and form_type == 1:  # 1 = ACHR
             refid_kind = b0 >> 6
-            raw_items = parse_achr_inventory(data, change_flags, refid_kind)
+            raw_items = parse_achr_inventory(data, change_flags, refid_kind,
+                                             formid_array)
             items = [(resolve_refid(x0, x1, x2, formid_array), count)
                      for (x0, x1, x2), count in raw_items]
             return items, info, plugins, light_plugins
 
     raise SaveParseError(
         "player ACHR change form (formID 0x00000014) not found in %s" % path)
+
+
+def extract_known_ingredients(path: str) -> Dict[int, int]:
+    """Parse a save for discovered alchemy effects.
+
+    Returns {ingredient_formID: bitmask} where bitmask bit j (0-3) is set
+    if effect j is known. From SkyrimAlchemyHelper (GPL-2.0):
+    ChangeForms with formType 16 ("Known ingredients") have 4 bytes of data,
+    first byte is a bitmask for the 4 effects.
+
+    Discovered 2026-10-05 via differential analysis: player ate a Purple
+    Mountain Flower (0x00077E1E) in a test save; the diff showed a new
+    type-16 ChangeForm with data 01 00 00 00 (bit 0 = first effect known).
+    """
+    body, info, flt_base = load_decompressed(path)
+    cur = Cursor(body, 0)
+
+    _form_version = cur.u8()
+    _plugin_info_size = cur.u32()
+    plugin_count = cur.u8()
+    plugins = [cur.wstring() for _ in range(plugin_count)]
+    light_plugin_count = cur.u16()
+    light_plugins = [cur.wstring() for _ in range(light_plugin_count)]
+
+    flt = {}
+    flt["formIDArrayCountOffset"] = cur.u32() - flt_base
+    flt["unknownTable3Offset"] = cur.u32() - flt_base
+    flt["globalDataTable1Offset"] = cur.u32() - flt_base
+    flt["globalDataTable2Offset"] = cur.u32() - flt_base
+    flt["changeFormsOffset"] = cur.u32() - flt_base
+    flt["globalDataTable3Offset"] = cur.u32() - flt_base
+    flt["globalDataTable1Count"] = cur.u32()
+    flt["globalDataTable2Count"] = cur.u32()
+    flt["globalDataTable3Count"] = cur.u32()
+    flt["changeFormCount"] = cur.u32()
+
+    fc = Cursor(body, flt["formIDArrayCountOffset"])
+    formid_array_count = fc.u32()
+    formid_array = [fc.u32() for _ in range(formid_array_count)]
+
+    known: Dict[int, int] = {}
+    cc = Cursor(body, flt["changeFormsOffset"])
+    for _ in range(flt["changeFormCount"]):
+        b0, b1, b2 = cc.u8(), cc.u8(), cc.u8()
+        _change_flags = cc.u32()
+        type_byte = cc.u8()
+        _ver = cc.u8()
+        size_class = type_byte >> 6
+        form_type = type_byte & 0x3F
+        if size_class == 0:
+            length1, length2 = cc.u8(), cc.u8()
+        elif size_class == 1:
+            length1, length2 = cc.u16(), cc.u16()
+        elif size_class == 2:
+            length1, length2 = cc.u32(), cc.u32()
+        else:
+            raise SaveParseError("bad change-form size class")
+        data = cc.raw(length1)
+        if length2:
+            try:
+                data = zlib.decompress(data)
+            except Exception:
+                pass  # not actually compressed, or corrupt; skip
+
+        if form_type == 16 and len(data) == 4:
+            try:
+                fid = resolve_refid(b0, b1, b2, formid_array)
+            except SaveParseError:
+                continue
+            if fid:
+                known[fid] = data[0]  # bitmask: bit j = effect j known
+
+    return known
+
+
+# ---------------------------------------------------------------------------
+# Auto-detect alchemy skill and perks from save (2026-10-05)
+# ---------------------------------------------------------------------------
+# Research (2026-10-05, verified against player saves):
+# - Base Alchemy skill: NPC_ 0x00000007, type 9, bit 9 (0x200) → 52-byte DNAM,
+#   byte 10 = Alchemy (base + racial). Skill-use level-ups NOT in save.
+# - Perks: ACHR 0x00000014, type 1, search decompressed data for
+#   (u8 rank + 3-byte RefID) pairs. RefID kind 1 = Skyrim.esm.
+PLAYER_BASE_FORMID = 0x00000007
+
+# Perk FormIDs (Skyrim.esm) → RefID bytes (kind 1: 0x40 | high bits)
+_PERK_REFIDS = {
+    # Alchemist ranks 1-5
+    bytes([0x4B, 0xE1, 0x27]): ("alchemist", 1),  # 0x000BE127
+    bytes([0x4C, 0x07, 0xCA]): ("alchemist", 2),  # 0x000C07CA
+    bytes([0x4C, 0x07, 0xCB]): ("alchemist", 3),  # 0x000C07CB
+    bytes([0x4C, 0x07, 0xCC]): ("alchemist", 4),  # 0x000C07CC
+    bytes([0x4C, 0x07, 0xCD]): ("alchemist", 5),  # 0x000C07CD
+    bytes([0x45, 0x82, 0x16]): ("benefactor", 1),  # 0x00058216
+    bytes([0x45, 0x82, 0x17]): ("poisoner", 1),    # 0x00058217
+    bytes([0x45, 0x82, 0x15]): ("physician", 1),   # 0x00058215
+    bytes([0x45, 0x82, 0x1D]): ("purity", 1),      # 0x0005821D
+}
+
+
+def _walk_change_forms(path: str):
+    """Yield (fid, form_type, change_flags, data) for each ChangeForm.
+
+    Shared helper for auto-detect functions. Returns (body, info, plugins,
+    light_plugins, formid_array) plus a generator.
+    """
+    body, info, flt_base = load_decompressed(path)
+    cur = Cursor(body, 0)
+    _form_version = cur.u8()
+    _plugin_info_size = cur.u32()
+    plugin_count = cur.u8()
+    plugins = [cur.wstring() for _ in range(plugin_count)]
+    light_plugin_count = cur.u16()
+    light_plugins = [cur.wstring() for _ in range(light_plugin_count)]
+
+    formIDArrayCountOffset = cur.u32() - flt_base
+    cur.skip(3 * 4)  # unknownTable3, globalData1, globalData2
+    changeFormsOffset = cur.u32() - flt_base
+    cur.skip(4)  # global3
+    cur.skip(3 * 4)  # table counts
+    changeFormCount = cur.u32()
+
+    fc = Cursor(body, formIDArrayCountOffset)
+    formid_array = [fc.u32() for _ in range(fc.u32())]
+
+    cc = Cursor(body, changeFormsOffset)
+    for _ in range(changeFormCount):
+        b0, b1, b2 = cc.u8(), cc.u8(), cc.u8()
+        change_flags = cc.u32()
+        type_byte = cc.u8()
+        _ver = cc.u8()
+        size_class = type_byte >> 6
+        form_type = type_byte & 0x3F
+        if size_class == 0:
+            length1, length2 = cc.u8(), cc.u8()
+        elif size_class == 1:
+            length1, length2 = cc.u16(), cc.u16()
+        elif size_class == 2:
+            length1, length2 = cc.u32(), cc.u32()
+        else:
+            continue  # bad size class, skip
+        try:
+            data = cc.raw(length1)
+        except (ValueError, IndexError):
+            break
+        if length2:
+            try:
+                data = zlib.decompress(data)
+            except Exception:
+                pass
+        try:
+            fid = resolve_refid(b0, b1, b2, formid_array)
+        except SaveParseError:
+            continue
+        yield fid, form_type, change_flags, data
+
+
+def extract_base_alchemy(path: str) -> int | None:
+    """Get base Alchemy skill (with racial) from save.
+
+    Returns the u8 value from NPC_ DNAM byte 10, or None if not found.
+    Note: This is BASE + racial, NOT including skill-use level-ups
+    (which are not stored in the save in a verified location).
+    """
+    for fid, form_type, change_flags, data in _walk_change_forms(path):
+        if fid != PLAYER_BASE_FORMID or form_type != 9:  # 9 = NPC_
+            continue
+        if not (change_flags & 0x200):  # bit 9 = CHANGE_NPC_SKILLS
+            return None
+        try:
+            cur = Cursor(data, 0)
+            # Skip sections before DNAM per ReSaver ChangeFormNPC.java order:
+            # bit0 (6B) → bit1 (24B) → bit6 (factions) → bit4 (3× RefID lists)
+            # → bit3 (20B) → bit5 (wstring) → bit9 (DNAM 52B)
+            if change_flags & 0x001:
+                cur.skip(6)
+            if change_flags & 0x002:
+                cur.skip(24)
+            if change_flags & 0x040:  # bit6: factions
+                for _ in range(_read_vsval(cur)):
+                    cur.skip(4)  # 3B RefID + u8 rank
+            if change_flags & 0x010:  # bit4: 3× RefID lists
+                for _ in range(3):
+                    for _ in range(_read_vsval(cur)):
+                        cur.skip(3)
+            if change_flags & 0x008:
+                cur.skip(20)
+            if change_flags & 0x020:  # bit5: wstring
+                _skip_wstring(cur)
+            # Now at DNAM (52 bytes)
+            dnam = cur.raw(52)
+            return dnam[10]  # byte 10 = Alchemy
+        except (ValueError, IndexError, SaveParseError):
+            return None
+    return None
+
+
+def extract_perks(path: str) -> dict:
+    """Get alchemy perks from save.
+
+    Returns {alchemist_ranks: int, benefactor: bool, poisoner: bool,
+             physician: bool, purity: bool}.
+    Searches player ACHR decompressed data for (rank + RefID) pairs.
+    """
+    result = {
+        "alchemist_ranks": 0,
+        "benefactor": False,
+        "poisoner": False,
+        "physician": False,
+        "purity": False,
+    }
+    for fid, form_type, change_flags, data in _walk_change_forms(path):
+        if fid != PLAYER_FORMID or form_type != 1:  # 1 = ACHR
+            continue
+        # Search for each perk RefID pattern
+        for refid_bytes, (perk_name, rank) in _PERK_REFIDS.items():
+            # Find all occurrences
+            start = 0
+            while True:
+                idx = data.find(refid_bytes, start)
+                if idx == -1:
+                    break
+                # Rank byte is immediately before the RefID
+                if idx > 0:
+                    rank_byte = data[idx - 1]
+                    if perk_name == "alchemist":
+                        # Count ranks: highest rank found = total ranks
+                        # (ranks are sequential, so rank 2 implies rank 1)
+                        if rank_byte >= 1 and rank > result["alchemist_ranks"]:
+                            result["alchemist_ranks"] = rank
+                    else:
+                        # For boolean perks, rank_byte >= 1 means taken
+                        if rank_byte >= 1:
+                            result[perk_name] = True
+                start = idx + 1
+        break  # only need the player ACHR
+    return result
+
+
+def extract_known_spells(path: str) -> List[int]:
+    """Parse a save for known spells.
+
+    Returns [spell_formID, ...]. From save format research (2026-10-05):
+    ChangeForms with formType 13 have change_flags=0x40 and 1 byte of data.
+    Player knows 3 spells, and there are exactly 3 type-13 ChangeForms.
+
+    Discovered via Reddit r/skyrimmods thread: known spells/enchantments are
+    tracked by a flag on the base Form record, not as a separate list.
+    """
+    body, info, flt_base = load_decompressed(path)
+    cur = Cursor(body, 0)
+
+    _form_version = cur.u8()
+    _plugin_info_size = cur.u32()
+    plugin_count = cur.u8()
+    plugins = [cur.wstring() for _ in range(plugin_count)]
+    light_plugin_count = cur.u16()
+    light_plugins = [cur.wstring() for _ in range(light_plugin_count)]
+
+    flt = {}
+    flt["formIDArrayCountOffset"] = cur.u32() - flt_base
+    flt["unknownTable3Offset"] = cur.u32() - flt_base
+    flt["globalDataTable1Offset"] = cur.u32() - flt_base
+    flt["globalDataTable2Offset"] = cur.u32() - flt_base
+    flt["changeFormsOffset"] = cur.u32() - flt_base
+    flt["globalDataTable3Offset"] = cur.u32() - flt_base
+    flt["globalDataTable1Count"] = cur.u32()
+    flt["globalDataTable2Count"] = cur.u32()
+    flt["globalDataTable3Count"] = cur.u32()
+    flt["changeFormCount"] = cur.u32()
+
+    fc = Cursor(body, flt["formIDArrayCountOffset"])
+    formid_array_count = fc.u32()
+    formid_array = [fc.u32() for _ in range(formid_array_count)]
+
+    known: List[int] = []
+    cc = Cursor(body, flt["changeFormsOffset"])
+    for _ in range(flt["changeFormCount"]):
+        b0, b1, b2 = cc.u8(), cc.u8(), cc.u8()
+        _change_flags = cc.u32()
+        type_byte = cc.u8()
+        _ver = cc.u8()
+        size_class = type_byte >> 6
+        form_type = type_byte & 0x3F
+        if size_class == 0:
+            length1, length2 = cc.u8(), cc.u8()
+        elif size_class == 1:
+            length1, length2 = cc.u16(), cc.u16()
+        elif size_class == 2:
+            length1, length2 = cc.u32(), cc.u32()
+        else:
+            raise SaveParseError("bad change-form size class")
+        data = cc.raw(length1)
+        if length2:
+            try:
+                data = zlib.decompress(data)
+            except Exception:
+                pass
+
+        if form_type == 13:
+            try:
+                fid = resolve_refid(b0, b1, b2, formid_array)
+            except SaveParseError:
+                continue
+            if fid:
+                known.append(fid)
+
+    return sorted(known)
+
+
+def extract_known_enchantments(path: str) -> List[int]:
+    """Parse a save for known enchantments (disenchanted).
+
+    Returns [enchantment_formID, ...]. From save format research (2026-10-05):
+    ChangeForms with formType 48 have change_flags=0x01 and 6 bytes of data.
+    Player has disenchanted 4 items, and there are exactly 4 type-48 ChangeForms.
+
+    Discovered via Reddit r/skyrimmods thread: known enchantments are tracked
+    by a flag on the base Form record, not as a separate list.
+    """
+    body, info, flt_base = load_decompressed(path)
+    cur = Cursor(body, 0)
+
+    _form_version = cur.u8()
+    _plugin_info_size = cur.u32()
+    plugin_count = cur.u8()
+    plugins = [cur.wstring() for _ in range(plugin_count)]
+    light_plugin_count = cur.u16()
+    light_plugins = [cur.wstring() for _ in range(light_plugin_count)]
+
+    flt = {}
+    flt["formIDArrayCountOffset"] = cur.u32() - flt_base
+    flt["unknownTable3Offset"] = cur.u32() - flt_base
+    flt["globalDataTable1Offset"] = cur.u32() - flt_base
+    flt["globalDataTable2Offset"] = cur.u32() - flt_base
+    flt["changeFormsOffset"] = cur.u32() - flt_base
+    flt["globalDataTable3Offset"] = cur.u32() - flt_base
+    flt["globalDataTable1Count"] = cur.u32()
+    flt["globalDataTable2Count"] = cur.u32()
+    flt["globalDataTable3Count"] = cur.u32()
+    flt["changeFormCount"] = cur.u32()
+
+    fc = Cursor(body, flt["formIDArrayCountOffset"])
+    formid_array_count = fc.u32()
+    formid_array = [fc.u32() for _ in range(formid_array_count)]
+
+    known: List[int] = []
+    cc = Cursor(body, flt["changeFormsOffset"])
+    for _ in range(flt["changeFormCount"]):
+        b0, b1, b2 = cc.u8(), cc.u8(), cc.u8()
+        _change_flags = cc.u32()
+        type_byte = cc.u8()
+        _ver = cc.u8()
+        size_class = type_byte >> 6
+        form_type = type_byte & 0x3F
+        if size_class == 0:
+            length1, length2 = cc.u8(), cc.u8()
+        elif size_class == 1:
+            length1, length2 = cc.u16(), cc.u16()
+        elif size_class == 2:
+            length1, length2 = cc.u32(), cc.u32()
+        else:
+            raise SaveParseError("bad change-form size class")
+        data = cc.raw(length1)
+        if length2:
+            try:
+                data = zlib.decompress(data)
+            except Exception:
+                pass
+
+        if form_type == 48:
+            try:
+                fid = resolve_refid(b0, b1, b2, formid_array)
+            except SaveParseError:
+                continue
+            if fid:
+                known.append(fid)
+
+    return sorted(known)
 
 
 # ---------------------------------------------------------------------------
@@ -1015,12 +1447,74 @@ EFFECT_VALUES = {
 }
 
 
-def potion_price(effects) -> int:
-    """Sum of the standard per-effect values. Unknown effects count 0."""
+def potion_price(effects, skill=100, alchemist_ranks=0,
+                 benefactor=False, poisoner=False, physician=False) -> int:
+    """Sum of per-effect values, adjusted for skill and perks (2026-10-05).
+
+    Uses UESP's formula structure: value scales with magnitude, which scales
+    with skill and perk multipliers. Beneficial vs harmful effects get
+    different perk bonuses (Benefactor/Poisoner), and Restore effects get
+    Physician. This changes RELATIVE ranking, not just absolute values.
+    """
+    # Effects flagged as beneficial in Skyrim's data (get Benefactor bonus).
+    BENEFICIAL = {
+        "Cure Disease", "Cure Poison",
+        "Fortify Alteration", "Fortify Barter", "Fortify Block",
+        "Fortify Carry Weight", "Fortify Conjuration", "Fortify Destruction",
+        "Fortify Enchanting", "Fortify Health", "Fortify Heavy Armor",
+        "Fortify Illusion", "Fortify Light Armor", "Fortify Lockpicking",
+        "Fortify Magicka", "Fortify Marksman", "Fortify One-handed",
+        "Fortify Persuasion", "Fortify Pickpocket", "Fortify Restoration",
+        "Fortify Smithing", "Fortify Sneak", "Fortify Stamina",
+        "Fortify Two-handed",
+        "Regenerate Health", "Regenerate Magicka", "Regenerate Stamina",
+        "Resist Fire", "Resist Frost", "Resist Magic", "Resist Poison",
+        "Resist Shock",
+        "Restore Health", "Restore Magicka", "Restore Stamina",
+        "Invisibility", "Light", "Night Eye", "Waterbreathing",
+        "Spell Absorption",
+    }
+    # Restore effects get Physician bonus (stacks with Benefactor).
+    RESTORE = {"Restore Health", "Restore Magicka", "Restore Stamina"}
+
+    # Skill factor: simplified from UESP's (1 + (skill/100)*0.5) component.
+    # At 100 skill this is 1.5; at 36 it's ~1.18. Relative scaling matters.
+    skill_factor = 1 + (skill / 100) * 0.5
+    # Normalize to 100-skill baseline so default values match EFFECT_VALUES.
+    skill_norm = skill_factor / 1.5
+
+    alch_mult = 1 + (0.2 * alchemist_ranks)
+
+    total = 0
+    for e in effects:
+        base = EFFECT_VALUES.get(e, 0)
+        if base == 0:
+            continue
+        # Perk multiplier for this specific effect.
+        mult = alch_mult
+        if e in BENEFICIAL:
+            if benefactor:
+                mult *= 1.25
+            if e in RESTORE and physician:
+                mult *= 1.25
+        else:  # harmful
+            if poisoner:
+                mult *= 1.25
+        # UESP value formula uses ^1.1 exponent on (magnitude*duration).
+        # We approximate by applying it to the combined multiplier.
+        adjusted = base * skill_norm * (mult ** 1.1)
+        total += adjusted
+    return int(total)
+
+
+def potion_price_base(effects) -> int:
+    """Legacy: sum of standard values at 100 skill, no perks."""
     return sum(EFFECT_VALUES.get(e, 0) for e in effects)
 
 
-def _make_potion(effects, ings):
+def _make_potion(effects, ings, skill=15, alchemist_ranks=0,
+                 benefactor=True, poisoner=True, physician=True):
+    """Build potion dict with dynamic value (player stats as defaults)."""
     return {
         "effects": effects,
         "ingredients": [g["name"] for g in ings],
@@ -1028,7 +1522,281 @@ def _make_potion(effects, ings):
         # How many you can brew before one stack runs out:
         "batches": min(g["count"] for g in ings),
         "n": len(ings),
-        "price": potion_price(effects),
+        "price": potion_price(effects, skill=skill,
+                             alchemist_ranks=alchemist_ranks,
+                             benefactor=benefactor, poisoner=poisoner,
+                             physician=physician),
+    }
+
+
+def brewable_by_effect(owned: List[dict], skill=15, alchemist_ranks=0,
+                       benefactor=True, poisoner=True,
+                       physician=True) -> List[dict]:
+    """Find brewable potions by grouping ingredients by effect.
+
+    Player insight (2026-10-05): there are only ~20-50 valuable effects.
+    Group owned ingredients by effect, then check pairs within each group.
+    O(E * I_e^2) not O(n^3) — and no 933KB table needed.
+
+    Potion values use the given alchemy skill/perks (2026-10-05).
+
+    For each pair sharing at least one effect, the potion has ALL effects
+    shared by the pair (matching in-game alchemy).
+    """
+    # Group ingredient indices by effect
+    effect_to_idxs = {}
+    for i, o in enumerate(owned):
+        for eff in o.get("effects", []):
+            effect_to_idxs.setdefault(eff, []).append(i)
+
+    seen_pairs = set()
+    potions = []
+    effsets = [set(o.get("effects", [])) for o in owned]
+
+    for eff, idxs in effect_to_idxs.items():
+        if len(idxs) < 2:
+            continue
+        # Check all pairs in this effect group
+        for a in range(len(idxs)):
+            for b in range(a + 1, len(idxs)):
+                i, j = idxs[a], idxs[b]
+                key = (min(i, j), max(i, j))
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
+                shared = effsets[i] & effsets[j]
+                if shared:
+                    ings = [owned[i], owned[j]]
+                    # Batch count = min available
+                    batches = min(owned[i]["count"], owned[j]["count"])
+                    potions.append({
+                        "effects": sorted(shared),
+                        "price": potion_price(sorted(shared)),
+                        "ingredients": [owned[i]["name"], owned[j]["name"]],
+                        "batches": batches,
+                        "n": 2,
+                    })
+
+    potions.sort(key=lambda p: (-p["price"], -len(p["effects"]),
+                                p["ingredients"]))
+    return potions
+
+
+def load_potion_table(path: str) -> List[dict]:
+    """Load the pre-computed valuable potion table (top_potions.json).
+
+    Generated offline via compute_potions on all 191 ingredients.
+    Each entry: {effects, price, ingredients: [names]}.
+    """
+    import os
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return json.load(f)
+
+
+def brewable_from_table(owned: List[dict], potion_table: List[dict]) -> List[dict]:
+    """Find potions the player can brew.
+
+    owned: [{name, effects, count}]
+    Returns potions sorted by price desc, with batch counts based on
+    available ingredient quantities. O(T) not O(n^3).
+    """
+    owned_counts = {o["name"]: o["count"] for o in owned}
+    result = []
+    for p in potion_table:
+        ings = p["ingredients"]
+        # Check if player has all ingredients (with count > 0)
+        if not all(owned_counts.get(ing, 0) > 0 for ing in ings):
+            continue
+        # Batch count = min available across ingredients
+        # (simplified: assumes 1 unit per ingredient per potion)
+        batches = min(owned_counts.get(ing, 0) for ing in ings)
+        if batches <= 0:
+            continue
+        result.append({
+            "effects": p["effects"],
+            "price": p["price"],
+            "ingredients": ings,
+            "batches": batches,
+            "n": len(ings),
+        })
+    # Already sorted by price in the table, but ensure it
+    result.sort(key=lambda p: -p["price"])
+    return result
+
+
+def shopping_by_effect(owned: List[dict], ing_db: dict, gold: int,
+                      exclude=frozenset(), force_include=frozenset()) -> dict:
+    """Build shopping list via effect-grouping (2026-10-05 approach).
+
+    For each ingredient NOT owned, if it shares an effect with something the player
+    owns, it's a candidate. Rank by profit. O(I*E) not O(n^3).
+    """
+    owned_names = {o["name"] for o in owned}
+    owned_by_effect = {}
+    for o in owned:
+        for eff in o.get("effects", []):
+            owned_by_effect.setdefault(eff, []).append(o["name"])
+
+    suggestions = {}
+    for ing in ing_db.values():
+        name = ing["name"]
+        if name in owned_names:
+            continue
+        if name in exclude and name not in force_include:
+            continue
+        effects = ing.get("effects", [])
+        # Find the best pairing: for each shared effect, find an owned
+        # ingredient with that effect, compute the pair's potion price.
+        best_price = 0
+        best_pair = None
+        best_effects = []
+        ing_effset = set(effects)
+        for eff in effects:
+            if eff not in owned_by_effect:
+                continue
+            for owned_name in owned_by_effect[eff]:
+                # Find the owned ingredient's full effect set
+                owned_ing = next((o for o in owned if o["name"] == owned_name), None)
+                if not owned_ing:
+                    continue
+                shared = ing_effset & set(owned_ing.get("effects", []))
+                if not shared:
+                    continue
+                price = potion_price(sorted(shared))
+                if price > best_price:
+                    best_price = price
+                    best_pair = owned_name
+                    best_effects = sorted(shared)
+        if best_price == 0:
+            continue
+        cost = ing.get("base_value", 5) * 3
+        profit = best_price * SELL_FACTOR - cost
+        if profit <= 0 and name not in force_include:
+            continue
+        if name not in suggestions or profit > suggestions[name]["profit"]:
+            suggestions[name] = {
+                "name": name,
+                "cost": cost,
+                "best_price": best_price,
+                "profit": profit,
+                "effects": effects,
+                "pairs_with": best_pair,
+                "potion_effects": best_effects,
+            }
+
+    ranked = sorted(suggestions.values(), key=lambda s: -s["profit"])
+    buys = []
+    total_cost = 0
+    for s in ranked:
+        if total_cost + s["cost"] <= gold or not buys:
+            buys.append({
+                "name": s["name"],
+                "cost": s["cost"],
+                "qty": 1,
+                "effects": s["effects"],
+                "pairs_with": s["pairs_with"],
+                "potion_effects": s["potion_effects"],
+                "potion_price": s["best_price"],
+            })
+            total_cost += s["cost"]
+            if total_cost >= gold and len(buys) >= 10:
+                break
+
+    skip = [{"name": s["name"], "cost": s["cost"], "best_price": s["best_price"]}
+            for s in ranked if s["name"] not in {b["name"] for b in buys}]
+
+    return {
+        "buys": buys,
+        "total_cost": total_cost,
+        "total_value": sum(s["best_price"] for s in ranked[:len(buys)]),
+        "total_sell": int(sum(s["best_price"] for s in ranked[:len(buys)]) * SELL_FACTOR),
+        "skip": skip[:20],
+        "gold": gold,
+        "steps": [],  # No brew steps for the simplified shopping list
+        "phases": [],
+    }
+
+
+def shopping_from_table(owned: List[dict], potion_table: List[dict],
+                        ing_db: dict, gold: int,
+                        exclude=frozenset(), force_include=frozenset()) -> dict:
+    """Build a shopping list from the pre-computed potion table.
+
+    Finds valuable potions player is exactly 1 ingredient away from brewing,
+    ranks by profit. O(T) not O(n^3).
+    Returns dict with buys, total_cost, etc. (compatible with shop plan format).
+    """
+    owned_counts = {o["name"]: o["count"] for o in owned}
+    suggestions = {}  # name -> {name, cost, best_price, profit, effects}
+
+    for p in potion_table:
+        ings = p["ingredients"]
+        # Skip if player can already brew it
+        if all(owned_counts.get(ing, 0) > 0 for ing in ings):
+            continue
+        # Find missing ingredients
+        missing = [ing for ing in ings if owned_counts.get(ing, 0) == 0]
+        if len(missing) != 1:
+            continue
+        name = missing[0]
+        if name in exclude and name not in force_include:
+            continue
+        ing_data = ing_db.get(name)
+        if not ing_data:
+            continue
+        cost = ing_data.get("base_value", 5) * 3
+        profit = p["price"] * SELL_FACTOR - cost
+        # Only suggest if profitable (or force-included)
+        if name not in force_include and profit <= 0:
+            continue
+        # Keep the best (highest profit) suggestion per ingredient
+        if name not in suggestions or profit > suggestions[name]["profit"]:
+            suggestions[name] = {
+                "name": name,
+                "cost": cost,
+                "best_price": p["price"],
+                "profit": profit,
+                "effects": ing_data["effects"],
+            }
+
+    # Sort by profit descending
+    ranked = sorted(suggestions.values(), key=lambda s: -s["profit"])
+
+    # Build buys list (respecting gold)
+    buys = []
+    total_cost = 0
+    for s in ranked:
+        if total_cost + s["cost"] <= gold or not buys:
+            # Buy at least one even if over gold (so list isn't empty)
+            buys.append({
+                "name": s["name"],
+                "cost": s["cost"],
+                "qty": 1,
+                "effects": s["effects"],
+            })
+            total_cost += s["cost"]
+            if total_cost >= gold and len(buys) >= 5:
+                break
+
+    # Don't-buy list: ingredients that didn't make the cut
+    skip = []
+    for s in ranked:
+        if s["name"] not in {b["name"] for b in buys}:
+            skip.append({
+                "name": s["name"],
+                "cost": s["cost"],
+                "best_price": s["best_price"],
+            })
+
+    return {
+        "buys": buys,
+        "total_cost": total_cost,
+        "total_value": sum(s["best_price"] for s in ranked[:len(buys)]),
+        "total_sell": int(sum(s["best_price"] for s in ranked[:len(buys)]) * SELL_FACTOR),
+        "skip": skip[:20],  # Top 20 skips
+        "gold": gold,
     }
 
 
@@ -1051,7 +1819,12 @@ def compute_potions(owned: List[dict]) -> List[dict]:
             shared = effsets[i] & effsets[j]
             if shared:
                 potions.append(_make_potion(sorted(shared),
-                                            [owned[i], owned[j]]))
+                                            [owned[i], owned[j]],
+                                            skill=skill,
+                                            alchemist_ranks=alchemist_ranks,
+                                            benefactor=benefactor,
+                                            poisoner=poisoner,
+                                            physician=physician))
     for i in range(n):
         ei = effsets[i]
         for j in range(i + 1, n):
@@ -1063,98 +1836,352 @@ def compute_potions(owned: List[dict]) -> List[dict]:
                 shared = ij | (ei & ek) | (ej & ek)
                 if shared:
                     potions.append(_make_potion(
-                        sorted(shared), [owned[i], owned[j], owned[k]]))
+                        sorted(shared), [owned[i], owned[j], owned[k]],
+                        skill=skill, alchemist_ranks=alchemist_ranks,
+                        benefactor=benefactor, poisoner=poisoner,
+                        physician=physician))
     potions.sort(key=lambda p: (-p["price"], -len(p["effects"]),
                                 p["ingredients"]))
     return potions
 
 
-def shop_recommendations(owned: List[dict], chest_items: List[Tuple[str, int, int]],
-                         player_gold: int, ing_db: dict) -> List[dict]:
-    """Build a greedy buy-and-brew plan.
+def greedy_brew_total_static(ranked_potions: List[dict],
+                             counts: dict, min_price: int = 100) -> int:
+    """Best achievable total potion value from the ingredient counts.
 
-    owned: Ben's ingredient dicts (name, effects, count).
+    Uses brew_allocation (below), not a single greedy pass.
+    ranked_potions must be sorted by price descending (compute_potions
+    output). Used for the inventory-only baseline in the shop section.
+    """
+    total, _ = brew_allocation(ranked_potions, counts, min_price)
+    return total
+
+
+def _greedy_brew(potions: List[dict], counts: dict, min_price: int = 100,
+                 banned=None) -> Tuple[int, list]:
+    """One greedy pass over price-sorted potions.
+
+    Returns (total_value, [brewed potion dicts]) in brew order. If banned
+    is given (a potion dict), that potion is skipped -- used by
+    brew_allocation to explore alternatives.
+    """
+    counts = dict(counts)
+    brewed, total = [], 0
+    for p in potions:
+        if p["price"] < min_price:
+            break
+        if p is banned:
+            continue
+        ings = p["ingredients"]
+        if all(counts.get(i, 0) > 0 for i in ings):
+            for i in ings:
+                counts[i] -= 1
+            brewed.append(p)
+            total += p["price"]
+    return total, brewed
+
+
+def brew_allocation(potions: List[dict], counts: dict,
+                    min_price: int = 100) -> Tuple[int, list]:
+    """Brew plan maximizing total potion value ("total haul").
+
+    Plain greedy (best potion first) has a blind spot: a 3-ingredient
+    potion always outranks its 2-ingredient subsets (the game can only
+    add/strengthen effects), so greedy grabs the 3-pot even when its
+    ingredients would brew for more as 2-pots, stranding value.
+
+    Fix, in two phases (both deterministic):
+    1. Ruin-and-recreate: for each distinct potion in the greedy plan,
+       re-run greedy with that potion banned; keep improvements. Repeat
+       until no single ban improves.
+    2. Randomized greedy polish: re-run greedy many times over
+       price order perturbed by fixed-seed noise, keeping the best.
+       (Fixed seed => same input always gives same output.)
+    Never worse than plain greedy. On a real 17-ingredient shop stock
+    this reached the exact optimum (verified by branch-and-bound).
+    """
+    best_total, best_brewed = _greedy_brew(potions, counts, min_price)
+    improved = True
+    while improved:
+        improved = False
+        seen = set()
+        for p in best_brewed:
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            total, brewed = _greedy_brew(potions, counts, min_price,
+                                        banned=p)
+            if total > best_total:
+                best_total, best_brewed = total, brewed
+                improved = True
+                break
+    iters = max(400, min(2500, 900000 // max(1, len(potions))))
+    rng = random.Random(99)
+    indexed = list(potions)
+    for _ in range(iters):
+        order = sorted(indexed,
+                       key=lambda p: -(p["price"] + rng.uniform(0, 150)))
+        total, brewed = _greedy_brew(order, counts, min_price)
+        if total > best_total:
+            best_total, best_brewed = total, brewed
+    return best_total, best_brewed
+
+
+# Merchant reality checks (Empirical numbers at low Speech):
+#  - Buy price ~= base_value x 3 (merchant markup).
+#  - Sell price ~= potion list value x SELL_FACTOR (merchants pay ~1/4-1/3).
+# Potion list value still matters beyond gold: Alchemy XP scales with it,
+# and higher Alchemy means pricier potions and better sell prices later --
+# so the plan reports both gold and XP value, not gold alone.
+SELL_FACTOR = 0.3
+
+
+def phase_shop_plan(steps: List[dict], buys: List[dict],
+                    gold: int) -> Tuple[List[dict], List[dict]]:
+    """Split a shop plan into gold-affordable phases.
+
+    Player can't always afford the whole buy list at once. Each phase buys
+    the most profitable potions that fit in current gold, brews them,
+    sells them, and rolls the proceeds into the next phase:
+      grab what you can afford -> brew these -> sell -> buy more -> ...
+    Phases are ordered for maximum gp per visit: the most profitable
+    potions come first, so quitting after any phase banks the most gold.
+    Steps are tagged with their phase number (1-based, in place); steps
+    that stay unaffordable even after selling everything get phase None.
+    Returns (phases, unaffordable_steps). A single phase means the whole
+    list is affordable at once.
+    """
+    if gold is None or gold < 0:
+        for s in steps:
+            s["phase"] = 1
+        return [], []
+    cost_map = {b["name"]: b["cost"] for b in buys}
+    annotated = []
+    for idx, s in enumerate(steps):
+        buy_cost = sum(cost_map.get(i["name"], 0)
+                       for i in s["ingredients"] if i["bought"])
+        revenue = int(s["potion_price"] * SELL_FACTOR)
+        profit = revenue - buy_cost
+        annotated.append([idx, s, buy_cost, revenue, profit])
+    # Most profitable first: maximum gp per visit.
+    annotated.sort(key=lambda x: -x[4])
+    phases = []
+    remaining = annotated
+    current_gold = gold
+    n = 1
+    while remaining:
+        in_phase = []
+        phase_cost = 0
+        rest = []
+        for item in remaining:
+            if phase_cost + item[2] <= current_gold:
+                in_phase.append(item)
+                phase_cost += item[2]
+            else:
+                rest.append(item)
+        if not in_phase:
+            break
+        phase_revenue = sum(item[3] for item in in_phase)
+        buy_names = set()
+        for _, s, _, _, _ in in_phase:
+            for ing in s["ingredients"]:
+                if ing["bought"]:
+                    buy_names.add(ing["name"])
+        phase_buys = sorted(
+            (b for b in buys if b["name"] in buy_names),
+            key=lambda b: b["name"])
+        gold_after = current_gold - phase_cost + phase_revenue
+        phases.append({
+            "n": n,
+            "buys": [{"name": b["name"], "cost": b["cost"], "qty": b["qty"],
+                      "available": b["available"]} for b in phase_buys],
+            "cost": phase_cost,
+            "revenue": phase_revenue,
+            "gold_before": current_gold,
+            "gold_after": gold_after,
+            "ranks": sorted(item[0] + 1 for item in in_phase),
+        })
+        for _, s, _, _, _ in in_phase:
+            s["phase"] = n
+        current_gold = gold_after
+        remaining = rest
+        n += 1
+    unaffordable = [s for _, s, _, _, _ in remaining]
+    for s in unaffordable:
+        s["phase"] = None
+    return phases, unaffordable
+
+
+def shop_recommendations(owned: List[dict], chest_items: List[Tuple[str, int, int]],
+                         player_gold: int, ing_db: dict,
+                         min_price: int = 100,
+                         exclude: frozenset = frozenset(),
+                         force_include: frozenset = frozenset()) -> dict:
+    """Build a buy-and-brew plan from the merchant's chest.
+
+    owned: Player's ingredient dicts (name, effects, count).
     chest_items: [(ingredient name, base_value, count_available)] from the
         merchant chest.
-    ing_db: name -> ingredient dict (for effects of items Ben doesn't own).
-    Returns an ordered plan: [{name, available, buy_price, brew_with,
-    potion_effects, potion_price}]. Each step buys one unit, brews the best
-    potion using it, and consumes the ingredients so later steps use what's
-    left. This simulates the actual buy-brew-sell loop instead of evaluating
-    each ingredient in isolation (which double-counts shared ingredients).
+    ing_db: name -> ingredient dict (for effects of items player doesn't own).
+    exclude: ingredient names to skip (Player tapped X: not actually for
+        sale in the live barter menu).
+    force_include: ingredient names to buy even if not profitable
+        (Player tapped + on the Don't-buy list: they want it anyway).
+    Returns {"steps", "buys", "total_cost", "total_value", "total_sell"}:
+      buys: [{name, cost}] in buy order -- one unit each.
+      steps: potions unlocked by the purchases, in brew order; each step is
+        {potion_effects, potion_price, ingredients: [{name, bought}]} where
+        bought=True marks ingredients bought this trip (vs from inventory).
+      total_cost: gold spent. total_value: listed value of ALL potions
+        brewed from the combined pool. total_sell: realistic gold back
+        when selling those potions (list value x SELL_FACTOR) -- this is
+        the number that decides whether buying is worth it.
+      skip: [{name, cost, best_price}] -- stock that didn't make the buy
+        list, with the best potion price found (explicit Don't-buy list).
     Buy price ~= base_value x 3 (typical low-Speech merchant markup).
+    Gold sequencing is handled by phase_shop_plan (phases in the payload),
+    not by limiting the buy set here.
     """
-    # Working inventory (mutable counts).
     pool = {o["name"]: {"effects": o["effects"], "count": o["count"]}
             for o in owned}
-    gold = player_gold
-    plan = []
-    # Rank chest ingredients by their best standalone potion value first,
-    # so the plan goes in a sensible buy order.
-    ranked = []
+    owned_names = set(pool)
+    # Save owned counts before we add bought units to the pool.
+    owned_counts = {n: v["count"] for n, v in pool.items()}
+    # Drop anything player marked not-actually-for-sale.
+    chest_items = [(n, bv, a) for n, bv, a in chest_items if n not in exclude]
+
+    def effects_of(name):
+        if name in pool:
+            return pool[name]["effects"]
+        d = ing_db.get(name)
+        return d["effects"] if d else None
+
+    # Rank chest ingredients by (best potion value - buy cost), evaluated
+    # against the pool plus EVERY chest ingredient at once: the buys are
+    # a set, so bought ingredients can combine with each other, not just
+    # with the starting inventory. One compute_potions call covers all.
+    rank_pool = {n: {"effects": v["effects"], "count": v["count"]}
+                 for n, v in pool.items()}
     for name, base_value, avail in chest_items:
         if avail <= 0:
             continue
-        buy_price = base_value * 3
-        # Hypothetical best potion if we had one unit.
-        hypo_effects = None
-        if name in pool:
-            hypo_effects = pool[name]["effects"]
-        elif name in ing_db:
-            hypo_effects = ing_db[name]["effects"]
+        hypo_effects = effects_of(name)
         if not hypo_effects:
             continue
-        tmp = dict(pool)
-        tmp[name] = {"effects": hypo_effects,
-                     "count": tmp.get(name, {"count": 0})["count"] + 1}
-        tmp_list = [{"name": n, "effects": v["effects"], "count": v["count"]}
-                    for n, v in tmp.items() if v["count"] > 0]
-        best = None
-        for p in compute_potions(tmp_list):
-            if name in p["ingredients"]:
-                best = p
-                break
-        if best and best["price"] >= 100:
-            ranked.append((best["price"], name, base_value, avail, best))
-    ranked.sort(reverse=True)
-    # Greedy: buy in order, brew, consume.
-    for _, name, base_value, avail, _ in ranked:
-        buy_price = base_value * 3
-        if buy_price > gold:
-            continue
-        # Add one unit to the pool.
-        if name in pool:
-            pool[name]["count"] += 1
-        elif name in ing_db:
-            pool[name] = {"effects": ing_db[name]["effects"], "count": 1}
+        if name in rank_pool:
+            rank_pool[name]["count"] += 1
         else:
+            rank_pool[name] = {"effects": hypo_effects, "count": 1}
+    rank_list = [{"name": n, "effects": v["effects"], "count": v["count"]}
+                 for n, v in rank_pool.items()]
+    ranked_potions = compute_potions(rank_list)
+    ranked = []
+    skip_info = {}
+    for name, base_value, avail in chest_items:
+        if avail <= 0:
             continue
-        pool_list = [{"name": n, "effects": v["effects"], "count": v["count"]}
-                     for n, v in pool.items() if v["count"] > 0]
-        best = None
-        for p in compute_potions(pool_list):
-            if name in p["ingredients"]:
-                best = p
-                break
-        if best is None:
-            pool[name]["count"] -= 1
+        cost = base_value * 3
+        hypo_effects = effects_of(name)
+        if not hypo_effects:
             continue
-        # Consume the brewed ingredients.
-        for ing_name in best["ingredients"]:
-            pool[ing_name]["count"] -= 1
-        gold -= buy_price
-        # What did we brew it with (excluding the bought ingredient)?
-        brew_with = [i for i in best["ingredients"] if i != name]
-        plan.append({
-            "name": name,
-            "available": avail,
-            "buy_price": buy_price,
-            "brew_with": brew_with,
-            "potion_effects": best["effects"],
-            "potion_price": best["price"],
-            "gold_left": gold,
-        })
-    return plan
+        best = next((p for p in ranked_potions
+                     if name in p["ingredients"] and p["price"] >= min_price),
+                    None)
+        # Worth buying only if realistic sell proceeds beat the price,
+        # unless player force-included it (tapped + on Don't-buy: they want
+        # it anyway). Gold sequencing is handled by phase_shop_plan.
+        # (List value still drives Alchemy XP -- reported separately.)
+        if name in force_include or (
+                best and best["price"] * SELL_FACTOR > cost):
+            profit = (best["price"] * SELL_FACTOR - cost) if best else 0
+            ranked.append((profit, name, cost, hypo_effects))
+        else:
+            skip_info[name] = {
+                "name": name, "cost": cost,
+                "best_price": best["price"] if best else 0,
+            }
+    ranked.sort(reverse=True)
+
+    # Take the full profitable buy set; phase_shop_plan sequences it
+    # by gold affordability.
+    buys = []
+    for _, name, cost, hypo_effects in ranked:
+        avail = next(a for n, _, a in chest_items if n == name)
+        buys.append({"name": name, "cost": cost, "effects": hypo_effects,
+                     "available": avail, "unit_cost": cost})
+    bought_names = {b["name"] for b in buys}
+
+    # Brew the combined pool greedily, best potion first.
+    # Add ALL available units to the pool -- brew_allocation will use
+    # what it needs; we prune to actual usage below.
+    for b in buys:
+        name = b["name"]
+        avail = b["available"]
+        if name in pool:
+            pool[name]["count"] += avail
+        else:
+            pool[name] = {"effects": b["effects"], "count": avail}
+    pool_list = [{"name": n, "effects": v["effects"], "count": v["count"]}
+                 for n, v in pool.items() if v["count"] > 0]
+    # Brew for maximum total value (see brew_allocation); the displayed
+    # steps are the brewed potions that use bought ingredients.
+    total_value, brewed = brew_allocation(
+        compute_potions(pool_list),
+        {n: v["count"] for n, v in pool.items() if v["count"] > 0},
+        min_price)
+    # Prune buys to ingredients the plan actually brews -- never pay for
+    # stock that goes unused. Count actual usage to set buy quantities.
+    from collections import Counter
+    used_counts = Counter()
+    for p in brewed:
+        used_counts.update(p["ingredients"])
+    # For bought ingredients, qty = bought units actually used.
+    # (brew_allocation uses from the combined pool; owned stock is used
+    # first, so bought_used = total_used - owned_count, capped at available.)
+    pruned_buys = []
+    for b in buys:
+        name = b["name"]
+        total_used = used_counts.get(name, 0)
+        owned_count = owned_counts.get(name, 0)
+        bought_used = max(0, total_used - owned_count)
+        bought_used = min(bought_used, b["available"])
+        if bought_used > 0:
+            b["qty"] = bought_used
+            b["cost"] = b["unit_cost"] * bought_used
+            pruned_buys.append(b)
+    buys = pruned_buys
+    bought_names = {b["name"] for b in buys}
+    # Ranked by potion value, highest first: #1 brews first for max XP.
+    brewed = sorted(brewed, key=lambda p: -p["price"])
+    steps = []
+    for p in brewed:
+        ings = p["ingredients"]
+        if any(i in bought_names and i not in owned_names for i in ings):
+            steps.append({
+                "potion_effects": p["effects"],
+                "potion_price": p["price"],
+                "ingredients": [
+                    {"name": i,
+                     "bought": i in bought_names and i not in owned_names}
+                    for i in ings],
+            })
+    # Split into gold-affordable phases (see phase_shop_plan); steps get
+    # a "phase" tag, phases carry the buy/brew/sell sequence.
+    phases, _ = phase_shop_plan(steps, buys, player_gold)
+    # Explicit Don't-buy list: stock that failed the profitability filter,
+    # with the best potion price found so player sees why.
+    skip = sorted(skip_info.values(), key=lambda s: s["name"])
+    return {
+        "steps": steps,
+        "buys": [{"name": b["name"], "cost": b["cost"], "qty": b["qty"],
+                  "available": b["available"]} for b in buys],
+        "total_cost": sum(b["cost"] for b in buys),
+        "total_value": total_value,
+        "total_sell": int(total_value * SELL_FACTOR),
+        "phases": phases,
+        "gold": player_gold,
+        "skip": skip,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1204,6 +2231,52 @@ PAGE_HTML = """<!DOCTYPE html>
     background: #1d1913; color: #b7a888; cursor: pointer; min-height: 48px;
   }
   nav.tabs button.active { background: #2a241a; color: #ffe9b0; font-weight: bold; }
+  .threshold-bar {
+    display: flex; align-items: center; gap: 0.8rem;
+    padding: 0.6rem 1rem; color: #c9b98a; font-size: 0.9rem;
+  }
+  .threshold-bar input[type="range"] { flex: 1; max-width: 320px; accent-color: #c9a227; }
+  .threshold-bar #minval-show { font-weight: bold; color: #ffe9b0; }
+  .effpills { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+  .effpill {
+    font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 1rem;
+    background: #1a1610; color: #6b5f45; border: 1px solid #3a3226;
+    cursor: pointer; user-select: none;
+  }
+  .effpill.known { background: #2a3a1a; color: #b0d080; border-color: #5a7a3a; }
+  .brewtag {
+    font-size: 0.85rem; padding: 0.05rem 0.45rem; border-radius: 1rem;
+    background: #1a1610; color: #e8ddc9; border: 1px solid #3a3226;
+    margin: 0 0.2rem 0.15rem 0; display: inline-block; white-space: nowrap;
+  }
+  .brewtag.bought { background: #3a2f14; color: #ffd968; border-color: #8a6d2f; }
+  /* Ingredient that would reveal a new effect if brewed (2026-10-05).
+     The effect text itself is NOT colored; the ingredient gets a background. */
+  .ing-discovery { background: #2a4a2a; padding: 0.1rem 0.4rem;
+    border-radius: 0.25rem; }
+  /* Disenchant tab (2026-10-05) */
+  .disenchant-row { display: flex; justify-content: space-between;
+    align-items: center; padding: 0.5rem; border-bottom: 1px solid #2a2a2a; }
+  /* Alchemy settings (2026-10-05) */
+  .alchemy-settings { margin: 0.5rem 1rem; padding: 0.5rem;
+    border: 1px solid #3a3a3a; border-radius: 0.25rem; }
+  .alchemy-settings summary { cursor: pointer; font-weight: bold; }
+  .settings-grid { display: flex; flex-wrap: wrap; gap: 0.8rem;
+    margin-top: 0.5rem; align-items: center; }
+  .settings-grid label { display: flex; align-items: center; gap: 0.3rem; }
+  .settings-grid button { padding: 0.3rem 1rem; border-radius: 0.25rem;
+    border: 1px solid #5a5a5a; background: #2a4a2a; color: #e0e0e0;
+    cursor: pointer; }
+  .excl-x { color: #ff8a8a; text-decoration: none; font-weight: bold;
+    cursor: pointer; font-size: 0.85rem; }
+  .shopstep { border-bottom: 1px solid #2a2a2a; padding: 0.45rem 0; }
+  .shopstep-h { font-weight: bold; margin-bottom: 0.3rem; }
+  .shopsub { margin: 0.35rem 0 0.35rem 0.75rem; }
+  .discover-badge {
+    display: inline-block; font-size: 0.75rem; padding: 0.1rem 0.5rem;
+    border-radius: 1rem; background: #3a2a1a; color: #ffcc80;
+    margin-left: 0.5rem;
+  }
   main { padding: 0 1rem; }
   section.tab { display: none; }
   section.tab.active { display: block; }
@@ -1292,6 +2365,7 @@ PAGE_HTML = """<!DOCTYPE html>
 <header>
   <h1>&#9875; Skyrim Alchemy Companion</h1>
   <button id="refresh">&#8635; Refresh from latest save</button>
+  <button id="shutdown" title="Stop the companion server">&#9199; Quit</button>
   <div id="status">Loading&hellip;</div>
 </header>
 <div id="error"></div>
@@ -1305,18 +2379,29 @@ PAGE_HTML = """<!DOCTYPE html>
 </div>
 
 <nav class="tabs">
-  <button id="tabbtn-price" class="active">&#128176; By Price</button>
-  <button id="tabbtn-effect">&#129516; By Effect</button>
+  <button id="tabbtn-price" class="active">&#128176; Potions</button>
+  <button id="tabbtn-disenchant">&#128142; Enchantments</button>
 </nav>
 
 <main>
-  <section id="shop" style="display:none">
-    <h2 id="shop-h">Shop buys</h2>
-    <div class="hint" id="shop-hint"></div>
-    <div id="shoprecs"></div>
-  </section>
-
   <section id="tab-price" class="tab active">
+    <div class="threshold-bar">
+      <label for="minval">Min value: <span id="minval-show">0</span>g</label>
+      <input type="range" id="minval" min="0" max="1000" step="25" value="0">
+    </div>
+    <details class="alchemy-settings">
+      <summary>⚗️ Alchemy skill & perks (affects potion values)</summary>
+      <div id="alch-detected" class="hint" style="margin-bottom:0.5rem"></div>
+      <div class="settings-grid">
+        <label>Skill: <input type="number" id="alch-skill" min="15" max="100" value="15" style="width:4rem"></label>
+        <label>Alchemist ranks: <input type="number" id="alch-ranks" min="0" max="5" value="0" style="width:3rem"></label>
+        <label><input type="checkbox" id="perk-benefactor"> Benefactor</label>
+        <label><input type="checkbox" id="perk-poisoner"> Poisoner</label>
+        <label><input type="checkbox" id="perk-physician"> Physician</label>
+        <button id="alch-apply">Apply</button>
+        <button id="alch-reset-detected" title="Reset to values detected from save">Reset to detected</button>
+      </div>
+    </details>
     <div class="controls">
       <input id="search" type="search" placeholder="Filter: effect or ingredient&hellip;" autocomplete="off">
       <select id="ingfilter"><option value="">All ingredients</option></select>
@@ -1324,21 +2409,17 @@ PAGE_HTML = """<!DOCTYPE html>
     <h2 id="potion-h">Potions you can brew</h2>
     <div class="hint">Tap a column header to sort. Tap <b>+</b> to queue a brew &mdash; ingredients are deducted and the list updates.</div>
     <div id="potions"></div>
+    <details class="ings">
+      <summary id="ing-h">Your ingredients</summary>
+      <div id="ingredients"></div>
+    </details>
   </section>
 
-  <section id="tab-effect" class="tab">
-    <div class="controls">
-      <select id="effectpick"></select>
-    </div>
-    <h2 id="effect-h">Recipes by effect</h2>
-    <div class="hint">Every brewable recipe that produces the chosen effect, richest first. Brewing here uses the same ingredient pool.</div>
-    <div id="effectpotions"></div>
+  <section id="tab-disenchant" class="tab">
+    <h2>Known Enchantments</h2>
+    <div class="hint">Enchantments you've learned via disenchanting. Auto-detected from save.</div>
+    <div id="known-enchantments"></div>
   </section>
-
-  <details class="ings">
-    <summary id="ing-h">Your ingredients</summary>
-    <div id="ingredients"></div>
-  </details>
 </main>
 
 <script>
@@ -1356,8 +2437,58 @@ const S = {
   esort: { key: "price", dir: -1 },       // effect tab sort
   ingFilter: "",
   effectFilter: "",
-  search: ""
+  search: "",
+  minValue: parseInt(localStorage.getItem("skyrim-minval") || "0", 10) || 0,
+  // knownEffects is populated from the save file in resetState().
+  // Maps ingredient name -> list of known effect indexes (0-3).
+  knownEffects: {},
 };
+
+// Per-shop "not actually for sale" exclusions (player taps X on a buy).
+function getExcluded(location) {
+  const all = JSON.parse(localStorage.getItem("skyrim-shop-excluded") || "{}");
+  return new Set(all[location] || []);
+}
+function setExcluded(location, set) {
+  const all = JSON.parse(localStorage.getItem("skyrim-shop-excluded") || "{}");
+  if (set.size) all[location] = [...set];
+  else delete all[location];
+  localStorage.setItem("skyrim-shop-excluded", JSON.stringify(all));
+}
+// Force-include: Player tapped + on the Don't-buy list (wants it anyway).
+function getForced(location) {
+  const all = JSON.parse(localStorage.getItem("skyrim-shop-forced") || "{}");
+  return new Set(all[location] || []);
+}
+function setForced(location, set) {
+  const all = JSON.parse(localStorage.getItem("skyrim-shop-forced") || "{}");
+  if (set.size) all[location] = [...set];
+  else delete all[location];
+  localStorage.setItem("skyrim-shop-forced", JSON.stringify(all));
+}
+
+function isKnown(ingName, effect) {
+  // S.knownEffects maps name -> list of known effect INDEXES (0-3) from the save.
+  const knownIdx = S.knownEffects[ingName];
+  if (!knownIdx) return false;
+  const ingData = S.data.ingredients.find((g) => g.name === ingName);
+  if (!ingData) return false;
+  const idx = ingData.effects.indexOf(effect);
+  return idx !== -1 && knownIdx.indexOf(idx) !== -1;
+}
+
+// How many unknown effects would brewing this potion reveal?
+function discoveryValue(p) {
+  let n = 0;
+  for (const ing of p.ingredients) {
+    const ingData = S.data.ingredients.find((g) => g.name === ing);
+    if (!ingData) continue;
+    for (const e of p.effects) {
+      if (ingData.effects.indexOf(e) !== -1 && !isKnown(ing, e)) n++;
+    }
+  }
+  return n;
+}
 
 function showError(msg) {
   const el = $("error");
@@ -1479,9 +2610,25 @@ function potionTable(potions, st, onSort, showCap) {
 
     const tdI = document.createElement("td");
     tdI.className = "ings";
-    tdI.innerHTML = p.ingredients.map((nm) =>
-      escapeHtml(nm) + " <span class='have'>(" + (S.remaining[nm] || 0) +
-      " left)</span>").join("<br>");
+    // Highlight ingredients that would reveal a new effect (2026-10-05):
+    // if brewing this potion would discover an unknown effect for a specific
+    // ingredient, give that ingredient a different background. Do NOT color
+    // the effect text itself.
+    tdI.innerHTML = p.ingredients.map((nm) => {
+      const ingData = S.data.ingredients.find((g) => g.name === nm);
+      let wouldDiscover = false;
+      if (ingData) {
+        for (const eff of p.effects) {
+          if (ingData.effects.indexOf(eff) !== -1 && !isKnown(nm, eff)) {
+            wouldDiscover = true;
+            break;
+          }
+        }
+      }
+      const cls = wouldDiscover ? "ing-discovery" : "";
+      return "<span class='" + cls + "'>" + escapeHtml(nm) + "</span>" +
+        " <span class='have'>(" + (S.remaining[nm] || 0) + " left)</span>";
+    }).join("<br>");
     tr.appendChild(tdI);
 
     const tdN = document.createElement("td");
@@ -1491,7 +2638,9 @@ function potionTable(potions, st, onSort, showCap) {
 
     const tdE = document.createElement("td");
     tdE.className = "effects";
-    tdE.textContent = p.effects.join(" + ");
+    // Effect text is NOT colored (2026-10-05). The ingredient highlight
+    // above shows what would be discovered.
+    tdE.innerHTML = p.effects.map((eff) => escapeHtml(eff)).join(" + ");
     tr.appendChild(tdE);
 
     const tdB = document.createElement("td");
@@ -1526,7 +2675,7 @@ function escapeHtml(s) {
 // ---------------------------------------------------------------- render
 function filteredPricePotions() {
   const q = S.search.trim().toLowerCase();
-  let list = S.data.potions.filter(brewable);
+  let list = S.data.potions.filter(brewable).filter((p) => p.price >= S.minValue);
   if (S.ingFilter)
     list = list.filter((p) => p.ingredients.indexOf(S.ingFilter) !== -1);
   if (q)
@@ -1536,12 +2685,6 @@ function filteredPricePotions() {
   return sortPotions(list, S.sort);
 }
 
-function filteredEffectPotions() {
-  let list = S.data.potions.filter(brewable);
-  if (S.effectFilter)
-    list = list.filter((p) => p.effects.indexOf(S.effectFilter) !== -1);
-  return sortPotions(list, S.esort);
-}
 
 function onSortPrice(col) {
   if (S.sort.key === col) S.sort.dir = -S.sort.dir;
@@ -1549,47 +2692,42 @@ function onSortPrice(col) {
   renderPriceTab();
 }
 
-function onSortEffect(col) {
-  if (S.esort.key === col) S.esort.dir = -S.esort.dir;
-  else S.esort = { key: col, dir: col === "price" ? -1 : 1 };
-  renderEffectTab();
-}
 
 function renderPriceTab() {
   const list = filteredPricePotions();
-  $("potion-h").innerHTML = "Potions you can brew " +
-    "<span class='badge'>" + list.length + "</span>";
   const el = $("potions");
   el.innerHTML = "";
+
+  // "One ingredient away" section at the top (2026-10-05):
+  // If you had X, it would combine with Y for a Zg potion.
+  const oneAway = (S.data.shop && S.data.shop.plan && S.data.shop.plan.buys) || [];
+  if (oneAway.length) {
+    const hdr = document.createElement("h3");
+    hdr.textContent = "One ingredient away — consider picking up:";
+    hdr.style.marginTop = "0";
+    el.appendChild(hdr);
+    const ul = document.createElement("ul");
+    ul.style.listStyle = "none";
+    ul.style.paddingLeft = "0";
+    oneAway.slice(0, 5).forEach((b) => {
+      const li = document.createElement("li");
+      li.style.marginBottom = "8px";
+      li.innerHTML = "If you had <b>" + escapeHtml(b.name) + "</b> (" + b.cost + "g), " +
+        "it would combine with <b>" + escapeHtml(b.pairs_with || "?") + "</b> " +
+        "for a <b>" + b.potion_price + "g</b> " +
+        escapeHtml((b.potion_effects || []).join(" + ")) + " potion.";
+      ul.appendChild(li);
+    });
+    el.appendChild(ul);
+    const hr = document.createElement("hr");
+    el.appendChild(hr);
+  }
+
+  $("potion-h").innerHTML = "Potions you can brew " +
+    "<span class='badge'>" + list.length + "</span>";
   el.appendChild(potionTable(list, S.sort, onSortPrice, true));
 }
 
-function renderEffectTab() {
-  // Effect picker lists effects present in currently-brewable potions.
-  const effSet = {};
-  for (const p of S.data.potions) {
-    if (!brewable(p)) continue;
-    for (const e of p.effects) effSet[e] = true;
-  }
-  const effs = Object.keys(effSet).sort();
-  const sel = $("effectpick");
-  const cur = S.effectFilter;
-  sel.innerHTML = "";
-  for (const e of effs) {
-    const o = document.createElement("option");
-    o.value = e; o.textContent = e;
-    sel.appendChild(o);
-  }
-  if (effs.indexOf(cur) !== -1) sel.value = cur;
-  S.effectFilter = sel.value || "";
-
-  const list = filteredEffectPotions();
-  $("effect-h").innerHTML = "Recipes: " + escapeHtml(S.effectFilter) + " " +
-    "<span class='badge'>" + list.length + "</span>";
-  const el = $("effectpotions");
-  el.innerHTML = "";
-  el.appendChild(potionTable(list, S.esort, onSortEffect, true));
-}
 
 function renderQueue() {
   const box = $("queue");
@@ -1624,9 +2762,25 @@ function renderQueue() {
   });
 }
 
+// ---------------------------------------------------------------- disenchant tab (2026-10-05)
+// Shows known enchantments auto-detected from save (Type-48 ChangeForms).
+function renderDisenchant() {
+  const enchEl = $("known-enchantments");
+  const knownEnchs = S.data.known_enchantments || [];
+  if (knownEnchs.length) {
+    enchEl.innerHTML = "<div class='hint'>You know " + knownEnchs.length +
+      " enchantments:</div>" +
+      knownEnchs.map((e) => "<div class='disenchant-row'><div><b>" +
+        escapeHtml(e.name) + "</b> <span class='have'>" +
+        escapeHtml(e.formid) + "</span></div></div>").join("");
+  } else {
+    enchEl.innerHTML = "<div class='empty'>No known enchantments detected.</div>";
+  }
+}
+
 function renderIngredients() {
   $("ing-h").textContent =
-    "Your ingredients (" + S.data.ingredients.length + ")";
+    "Your ingredients (" + S.data.ingredients.length + ") — tap effects to mark known";
   const el = $("ingredients");
   el.innerHTML = "";
   for (const g of S.data.ingredients) {
@@ -1639,6 +2793,16 @@ function renderIngredients() {
     c.className = "count";
     c.textContent = "x" + left + " left";
     row.appendChild(n); row.appendChild(c);
+    // Effect pills: show known status from the save (read-only).
+    const effs = document.createElement("div");
+    effs.className = "effpills";
+    for (const e of g.effects) {
+      const pill = document.createElement("span");
+      pill.className = "effpill" + (isKnown(g.name, e) ? " known" : "");
+      pill.textContent = e;
+      effs.appendChild(pill);
+    }
+    row.appendChild(effs);
     el.appendChild(row);
   }
 }
@@ -1664,51 +2828,21 @@ function fillIngredientFilter() {
   sel.value = cur;
 }
 
-function renderShop() {
-  const shop = S.data.shop;
-  const sec = $("shop");
-  if (!shop || !shop.recommendations.length) {
-    sec.style.display = "none";
-    return;
-  }
-  sec.style.display = "";
-  $("shop-h").textContent = "Buy at " + shop.location + " (" + shop.gold + "g)";
-  $("shop-hint").textContent =
-    "Buy in order, brew each with what's listed, sell, repeat. " +
-    "Ingredients are consumed as you go. Prices are estimates.";
-  const div = $("shoprecs");
-  div.innerHTML = "";
-  const tbl = document.createElement("table");
-  tbl.innerHTML = "<tr><th>#</th><th>Buy</th><th>Cost</th><th>Brew with</th><th>Makes</th></tr>";
-  shop.recommendations.slice(0, 20).forEach((r, i) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      "<td>" + (i + 1) + "</td>" +
-      "<td>" + r.name + (r.available > 1 ? " x" + r.available : "") + "</td>" +
-      "<td>" + r.buy_price + "g</td>" +
-      "<td>" + (r.brew_with.join(" + ") || "&mdash;") + "</td>" +
-      "<td>" + r.potion_effects.join(", ") + " (" + r.potion_price + "g)</td>";
-    tbl.appendChild(tr);
-  });
-  div.appendChild(tbl);
-}
-
 function renderAll() {
   renderStatus();
   renderQueue();
   fillIngredientFilter();
   renderPriceTab();
-  renderEffectTab();
   renderIngredients();
-  renderShop();
 }
 
 function setTab(which) {
   S.tab = which;
-  $("tabbtn-price").className = which === "price" ? "active" : "";
-  $("tabbtn-effect").className = which === "effect" ? "active" : "";
-  $("tab-price").className = "tab" + (which === "price" ? " active" : "");
-  $("tab-effect").className = "tab" + (which === "effect" ? " active" : "");
+  ["price", "disenchant"].forEach((t) => {
+    $("tabbtn-" + t).className = which === t ? "active" : "";
+    $("tab-" + t).className = "tab" + (which === t ? " active" : "");
+  });
+  if (which === "disenchant") renderDisenchant();
 }
 
 // ---------------------------------------------------------------- data
@@ -1718,26 +2852,121 @@ function resetState(data) {
   for (const g of data.ingredients) S.remaining[g.name] = g.count;
   S.queue = [];
   S.sort = { key: "price", dir: -1 };
-  S.esort = { key: "price", dir: -1 };
   S.ingFilter = "";
   S.search = "";
   $("search").value = "";
+  // Known effects come from the save file (authoritative).
+  // Maps ingredient name -> list of known effect indexes (0-3).
+  S.knownEffects = data.known_effects || {};
   // Keep a valid effect selection if possible.
   if (data.potions.length) {
     const top = data.potions.slice().sort((a, b) => b.price - a.price)[0];
-    if (top) S.effectFilter = top.effects[0] || "";
   }
+}
+
+// ---------------------------------------------------------------- alchemy settings (2026-10-05)
+// Skill and perks affect potion values. Stored in localStorage, sent to
+// backend via query params so prices are calculated with your stats.
+function getAlchemySettings() {
+  return {
+    skill: parseInt(localStorage.getItem("skyrim-alch-skill") || "15", 10) || 15,
+    ranks: parseInt(localStorage.getItem("skyrim-alch-ranks") || "0", 10) || 0,
+    benefactor: localStorage.getItem("skyrim-alch-benefactor") === "1",
+    poisoner: localStorage.getItem("skyrim-alch-poisoner") === "1",
+    physician: localStorage.getItem("skyrim-alch-physician") === "1",
+  };
+}
+function saveAlchemySettings(s) {
+  localStorage.setItem("skyrim-alch-skill", String(s.skill));
+  localStorage.setItem("skyrim-alch-ranks", String(s.ranks));
+  localStorage.setItem("skyrim-alch-benefactor", s.benefactor ? "1" : "0");
+  localStorage.setItem("skyrim-alch-poisoner", s.poisoner ? "1" : "0");
+  localStorage.setItem("skyrim-alch-physician", s.physician ? "1" : "0");
+}
+function initAlchemySettingsUI() {
+  const s = getAlchemySettings();
+  $("alch-skill").value = s.skill;
+  $("alch-ranks").value = s.ranks;
+  $("perk-benefactor").checked = s.benefactor;
+  $("perk-poisoner").checked = s.poisoner;
+  $("perk-physician").checked = s.physician;
+  // Show detected values from save (2026-10-05: auto-detect).
+  updateDetectedDisplay();
+}
+
+function updateDetectedDisplay() {
+  const el = $("alch-detected");
+  const d = (S.data && S.data.detected) || {};
+  const parts = [];
+  if (d.base_skill != null) {
+    parts.push("Base skill: " + d.base_skill + " (racial incl., level-ups not in save)");
+  }
+  const perks = [];
+  if (d.alchemist_ranks) perks.push("Alchemist " + d.alchemist_ranks);
+  if (d.benefactor) perks.push("Benefactor");
+  if (d.poisoner) perks.push("Poisoner");
+  if (d.physician) perks.push("Physician");
+  if (d.purity) perks.push("Purity");
+  if (perks.length) {
+    parts.push("Detected perks: " + perks.join(", "));
+  } else if (d.base_skill != null) {
+    parts.push("No alchemy perks detected");
+  }
+  el.textContent = parts.length ? "Detected from save: " + parts.join(" | ") : "";
+}
+
+function resetToDetected() {
+  const d = (S.data && S.data.detected) || {};
+  if (d.base_skill != null) {
+    $("alch-skill").value = d.base_skill;
+  }
+  $("alch-ranks").value = d.alchemist_ranks || 0;
+  $("perk-benefactor").checked = !!d.benefactor;
+  $("perk-poisoner").checked = !!d.poisoner;
+  $("perk-physician").checked = !!d.physician;
+  // Save and reload
+  const s = {
+    skill: parseInt($("alch-skill").value, 10) || 15,
+    ranks: parseInt($("alch-ranks").value, 10) || 0,
+    benefactor: $("perk-benefactor").checked,
+    poisoner: $("perk-poisoner").checked,
+    physician: $("perk-physician").checked,
+  };
+  saveAlchemySettings(s);
+  load();
 }
 
 async function load() {
   const btn = $("refresh");
   btn.disabled = true;
   btn.textContent = "Reading save…";
+  // Send this shop's exclusions and force-includes (from the last known location).
+  let url = "/api/data";
+  const params = [];
+  const lastLoc = localStorage.getItem("skyrim-shop-loc");
+  if (lastLoc) {
+    const excl = getExcluded(lastLoc);
+    const forced = getForced(lastLoc);
+    if (excl.size) params.push("exclude=" + encodeURIComponent([...excl].join("\\n")));
+    if (forced.size) params.push("force=" + encodeURIComponent([...forced].join("\\n")));
+    params.push("shop=" + encodeURIComponent(lastLoc));
+  }
+  // Alchemy skill/perks for dynamic potion values.
+  const alch = getAlchemySettings();
+  params.push("alch_skill=" + alch.skill);
+  params.push("alch_ranks=" + alch.ranks);
+  params.push("alch_benefactor=" + (alch.benefactor ? "1" : "0"));
+  params.push("alch_poisoner=" + (alch.poisoner ? "1" : "0"));
+  params.push("alch_physician=" + (alch.physician ? "1" : "0"));
+  if (params.length) url += "?" + params.join("&");
   try {
-    const r = await fetch("/api/data", { cache: "no-store" });
+    const r = await fetch(url, { cache: "no-store" });
     const data = await r.json();
     if (!data.ok) { showError(data.error || "Unknown error"); }
-    else { showError(null); resetState(data); renderAll(); }
+    else {
+      showError(null);
+      resetState(data); renderAll();
+    }
   } catch (e) {
     showError("Could not reach the companion server: " + e);
   }
@@ -1746,6 +2975,17 @@ async function load() {
 }
 
 $("refresh").addEventListener("click", load);
+$("shutdown").addEventListener("click", async () => {
+  if (!confirm("Stop the Alchemy Companion server?")) return;
+  try {
+    await fetch("/api/shutdown");
+  } catch (e) {
+    // Server is shutting down; fetch will fail. That's expected.
+  }
+  document.body.innerHTML = "<div style='padding:2rem;text-align:center'>" +
+    "<h2>Companion stopped.</h2>" +
+    "<p>You can close this tab.</p></div>";
+});
 $("search").addEventListener("input", () => {
   S.search = $("search").value;
   renderPriceTab();  // cheap: re-render from the last good payload
@@ -1754,13 +2994,36 @@ $("ingfilter").addEventListener("change", () => {
   S.ingFilter = $("ingfilter").value;
   renderPriceTab();
 });
-$("effectpick").addEventListener("change", () => {
-  S.effectFilter = $("effectpick").value;
-  renderEffectTab();
-});
 $("tabbtn-price").addEventListener("click", () => setTab("price"));
-$("tabbtn-effect").addEventListener("click", () => setTab("effect"));
+$("tabbtn-disenchant").addEventListener("click", () => setTab("disenchant"));
 $("q-clear").addEventListener("click", clearQueue);
+// Alchemy settings: init from localStorage, Apply saves and reloads.
+initAlchemySettingsUI();
+$("alch-apply").addEventListener("click", () => {
+  const s = {
+    skill: parseInt($("alch-skill").value, 10) || 15,
+    ranks: parseInt($("alch-ranks").value, 10) || 0,
+    benefactor: $("perk-benefactor").checked,
+    poisoner: $("perk-poisoner").checked,
+    physician: $("perk-physician").checked,
+  };
+  // Clamp.
+  s.skill = Math.max(15, Math.min(100, s.skill));
+  s.ranks = Math.max(0, Math.min(5, s.ranks));
+  saveAlchemySettings(s);
+  initAlchemySettingsUI();  // reflect clamped values
+  load();  // reload with new stats
+});
+$("alch-reset-detected").addEventListener("click", resetToDetected);
+// Min-value slider: persistent via localStorage.
+$("minval").value = S.minValue;
+$("minval-show").textContent = S.minValue;
+$("minval").addEventListener("input", () => {
+  S.minValue = parseInt($("minval").value, 10) || 0;
+  $("minval-show").textContent = S.minValue;
+  localStorage.setItem("skyrim-minval", String(S.minValue));
+  renderAll();
+});
 load();
 </script>
 </body>
@@ -1775,52 +3038,186 @@ class CompanionState:
         self.saves_dir = saves_dir
         self.lookup, self.ingredients = load_ingredient_db(db_path)
         self.ing_db = {ing["name"]: ing for ing in self.ingredients}
+        # Enchantment name mapping (FormID -> name) for auto-detected
+        # known enchantments (2026-10-05).
+        self.ench_names = {}
+        try:
+            names_path = os.path.join(os.path.dirname(db_path),
+                                      "enchantment_names.json")
+            with open(names_path, "r", encoding="utf-8") as f:
+                names_data = json.load(f)
+            self.ench_names = names_data.get("enchantments", {})
+        except (OSError, ValueError):
+            pass
+        # ESM mappings (FormID -> EDID) as fallback for enchantment names.
+        # (2026-10-05: not all enchantments have manual names.)
+        self.esm_ench = {}
+        try:
+            esm_path = os.path.join(os.path.dirname(db_path),
+                                    "esm_mappings.json")
+            with open(esm_path, "r", encoding="utf-8") as f:
+                esm_data = json.load(f)
+            for fid_str, info in esm_data.items():
+                if info.get("type") == "ENCH" and info.get("edid"):
+                    # Normalize: "0x%08X" format (lowercase 0x, uppercase digits)
+                    norm = fid_str.upper().replace("0X", "0x")
+                    self.esm_ench[norm] = info["edid"]
+        except (OSError, ValueError):
+            pass
         self.lock = threading.Lock()
         self.last_good = None
 
-    def read_current(self) -> dict:
+    def _ench_name_from_edid(self, edid: str) -> str:
+        """Convert ESM EDID to readable name.
+
+        e.g. 'EnchArmorFortifyAlchemyBase' -> 'Fortify Alchemy'
+             'EnchWeaponFrostDamageBase' -> 'Frost Damage'
+        """
+        # Remove prefix
+        name = edid
+        for prefix in ("EnchArmor", "EnchWeapon", "Ench"):
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+                break
+        # Remove suffixes
+        for suffix in ("Base", "01", "02", "03", "04", "05"):
+            if name.endswith(suffix):
+                name = name[:-len(suffix)]
+        # Split CamelCase: FortifyAlchemy -> Fortify Alchemy
+        import re
+        name = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', name)
+        name = re.sub(r'(?<=[A-Z])(?=[A-Z][a-z])', ' ', name)
+        return name.strip() or edid
+
+    def _get_detected_alchemy(self, save_path: str) -> dict:
+        """Auto-detect alchemy skill base and perks from save.
+
+        Returns {base_skill: int|None, alchemist_ranks: int,
+                 benefactor: bool, poisoner: bool, physician: bool,
+                 purity: bool}.
+        Base skill is from NPC_ DNAM (includes racial, excludes level-ups).
+        Perks are from ACHR RefID search. Failures return defaults.
+        (2026-10-05: auto-detect with manual override.)
+        """
+        result = {
+            "base_skill": None,
+            "alchemist_ranks": 0,
+            "benefactor": False,
+            "poisoner": False,
+            "physician": False,
+            "purity": False,
+        }
+        try:
+            base = extract_base_alchemy(save_path)
+            if base is not None:
+                result["base_skill"] = base
+        except Exception:
+            pass
+        try:
+            perks = extract_perks(save_path)
+            result.update(perks)
+        except Exception:
+            pass
+        return result
+
+    def read_current(self, exclude=frozenset(), exclude_shop="",
+                     force=frozenset(), force_shop="",
+                     alch_skill=15, alch_ranks=0,
+                     alch_benefactor=True, alch_poisoner=True,
+                     alch_physician=True) -> dict:
         """Parse the newest save; return the /api/data payload dict."""
         save_path = pick_save(self.saves_dir)
+        # Store alchemy stats for potion pricing.
+        self.alch_skill = alch_skill
+        self.alch_ranks = alch_ranks
+        self.alch_benefactor = alch_benefactor
+        self.alch_poisoner = alch_poisoner
+        self.alch_physician = alch_physician
         try:
             raw_items, info, plugins, light_plugins = \
                 extract_player_inventory(save_path)
-        except SaveParseError as e:
+        except (SaveParseError, ValueError) as e:
             return {"ok": False,
                     "error": "Save parse failed: %s" % e}
         except OSError as e:
             return {"ok": False,
                     "error": "Could not read save file: %s" % e}
-        owned = inventory_to_ingredients(raw_items, plugins, light_plugins,
-                                         self.lookup)
-        potions = compute_potions(owned)
-        # Shop recommendations: if we're in a mapped shop, check the
-        # merchant's chest for profitable buys.
-        shop = None
-        location = info.get("playerLocation", "")
-        if location in MERCHANT_CHESTS:
-            gold = next((c for f, c in raw_items if f == 0xF), 0)
-            chest_raw = extract_merchant_inventory(save_path, location)
-            chest_items = []
-            for fid, cnt in chest_raw:
+        # Discovered alchemy effects from the save (2026-10-05 request).
+        # Maps ingredient name -> list of known effect indexes (0-3).
+        known_effects = {}
+        try:
+            known_raw = extract_known_ingredients(save_path)
+            for fid, bitmask in known_raw.items():
                 plugin, obj_id = split_formid(fid, plugins, light_plugins)
-                if plugin is None or cnt <= 0:
+                if plugin is None:
                     continue
                 ing = self.lookup.get((plugin.lower(), obj_id))
                 if ing is None:
                     continue
-                chest_items.append((ing["name"], ing.get("base_value", 5),
-                                    cnt))
-            # Dedupe by name (chest may list same ingredient twice).
-            seen = {}
-            for name, bv, cnt in chest_items:
-                if name in seen:
-                    seen[name] = (name, bv, seen[name][2] + cnt)
-                else:
-                    seen[name] = (name, bv, cnt)
-            recs = shop_recommendations(owned, list(seen.values()), gold,
-                                        self.ing_db)
-            shop = {"location": location, "gold": gold,
-                    "recommendations": recs}
+                name = ing["name"]
+                known_effects[name] = [j for j in range(4)
+                                       if bitmask & (1 << j)]
+        except Exception:
+            pass  # known effects are optional; don't break the page
+        # Known spells and enchantments from save (2026-10-05).
+        # Type 13 = spells, Type 48 = enchantments. Flags on base Form.
+        known_spells = []
+        known_enchantments = []
+        try:
+            known_spells = ["0x%08X" % fid
+                            for fid in extract_known_spells(save_path)]
+        except Exception:
+            pass
+        try:
+            for fid in extract_known_enchantments(save_path):
+                fid_str = "0x%08X" % fid
+                # Priority: manual names > ESM EDID > FormID
+                # (2026-10-05: fill in missing names from ESM)
+                name = self.ench_names.get(fid_str)
+                if not name:
+                    edid = self.esm_ench.get(fid_str)
+                    if edid:
+                        name = self._ench_name_from_edid(edid)
+                    else:
+                        name = fid_str
+                known_enchantments.append({
+                    "formid": fid_str,
+                    "name": name,
+                })
+        except Exception:
+            pass
+        owned = inventory_to_ingredients(raw_items, plugins, light_plugins,
+                                         self.lookup)
+        # Effect-grouping approach (2026-10-05): O(E*I^2) not O(n^3).
+        # No pre-computed table needed.
+        potions = brewable_by_effect(
+            owned, skill=self.alch_skill, alchemist_ranks=self.alch_ranks,
+            benefactor=self.alch_benefactor, poisoner=self.alch_poisoner,
+            physician=self.alch_physician)
+        # Shopping list via effect-grouping (2026-10-05 approach).
+        # No merchant detection, no pre-computed table, no O(n^3).
+        shop = None
+        gold = next((c for f, c in raw_items if f == 0xF), 0)
+        recs = shopping_by_effect(owned, self.ing_db, gold,
+                                  exclude=exclude, force_include=force)
+        # Baseline: quick greedy estimate of inventory-only brew value.
+        # (Don't use brew_allocation here — its 400 randomized iterations
+        # over 4,916 table potions hangs. This is just for the shop's
+        # "nets Xg" display, not the actual brew plan.)
+        _counts = {o["name"]: o["count"] for o in owned}
+        baseline = 0
+        for p in potions:
+            if p["price"] < 100:
+                break
+            ings = p["ingredients"]
+            if all(_counts.get(i, 0) > 0 for i in ings):
+                for i in ings:
+                    _counts[i] -= 1
+                baseline += p["price"]
+        shop = {"gold": gold,
+                "baseline_value": baseline,
+                "baseline_sell": int(baseline * SELL_FACTOR),
+                "plan": recs}
         payload = {
             "ok": True,
             "save_name": os.path.basename(save_path),
@@ -1831,6 +3228,10 @@ class CompanionState:
             "ingredients": owned,
             "potions": potions,
             "shop": shop,
+            "known_effects": known_effects,
+            "known_spells": known_spells,
+            "known_enchantments": known_enchantments,
+            "detected": self._get_detected_alchemy(save_path),
         }
         with self.lock:
             self.last_good = payload
@@ -1855,10 +3256,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/":
             self._send(PAGE_HTML.encode("utf-8"),
                        "text/html; charset=utf-8")
-        elif self.path == "/api/data":
-            payload = state.read_current()
+        elif self.path == "/api/data" or self.path.startswith("/api/data?"):
+            qs = urllib.parse.urlparse(self.path).query
+            args = urllib.parse.parse_qs(qs)
+            excl_raw = args.get("exclude", [""])[0]
+            for_shop = args.get("shop", [""])[0]
+            exclude = frozenset(e for e in excl_raw.split("\n") if e)
+            force_raw = args.get("force", [""])[0]
+            force = frozenset(e for e in force_raw.split("\n") if e)
+            # Alchemy skill/perks for dynamic potion values (2026-10-05).
+            try:
+                alch_skill = int(args.get("alch_skill", ["15"])[0])
+            except ValueError:
+                alch_skill = 15
+            try:
+                alch_ranks = int(args.get("alch_ranks", ["0"])[0])
+            except ValueError:
+                alch_ranks = 0
+            alch_benefactor = args.get("alch_benefactor", ["0"])[0] == "1"
+            alch_poisoner = args.get("alch_poisoner", ["0"])[0] == "1"
+            alch_physician = args.get("alch_physician", ["0"])[0] == "1"
+            payload = state.read_current(
+                exclude=exclude, exclude_shop=for_shop,
+                force=force, force_shop=for_shop,
+                alch_skill=alch_skill, alch_ranks=alch_ranks,
+                alch_benefactor=alch_benefactor,
+                alch_poisoner=alch_poisoner,
+                alch_physician=alch_physician)
             body = json.dumps(payload).encode("utf-8")
             self._send(body, "application/json")
+        elif self.path == "/api/shutdown":
+            # Graceful shutdown for manually-run instances.
+            # (Not used when running as a service.)
+            self._send(b'{"ok": true}', "application/json")
+            import threading
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
         else:
             self.send_error(404, "not found")
 
