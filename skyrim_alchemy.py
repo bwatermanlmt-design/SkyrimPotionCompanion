@@ -750,122 +750,10 @@ def parse_achr_inventory(
 # Map from save-header location name -> merchant chest formID (Skyrim.esm).
 # Chest formIDs verified empirically from player saves (2026-10-03).
 # Add more shops as he visits them.
-MERCHANT_CHESTS = {
-    "Arcadia's Cauldron": 0x0009CD46,  # Arcadia (apothecary, Whiterun)
-}
-
 # REFR change-flag bits that trigger the actor-level EXTRADATA section
 # (ReSaver ChangeFormRefr.java).
 _REFR_EXTRADATA_BITS = (6, 12, 29, 31, 11, 17, 25, 26, 10)
 _REFR_EXTRADATA_MASK = sum(1 << b for b in _REFR_EXTRADATA_BITS)
-
-
-def parse_refr_inventory(data: bytes, change_flags: int,
-                         refid_kind: int) -> List[Tuple[Tuple[int, int, int], int]]:
-    """Walk a REFR (container) change-data body; return [((b0,b1,b2), count)].
-
-    Section order per ReSaver's ChangeFormRefr.java. Simpler than ACHR:
-    no animation blob, no actor-level sections.
-    """
-    cur = Cursor(data, 0)
-
-    # 1. initial data (same type derivation as ACHR).
-    if refid_kind == 2:      # CREATED
-        initial_type = 5
-    elif change_flags & ((1 << 25) | (1 << 3)):  # PROMOTED | CELL_CHANGED
-        initial_type = 6
-    elif change_flags & ((1 << 2) | (1 << 1)):    # HAVOK_MOVE | MOVE
-        initial_type = 4
-    else:
-        initial_type = 0
-    if initial_type not in _INITIAL_DATA_SIZES:
-        raise SaveParseError("bad REFR initialType %d" % initial_type)
-    cur.skip(_INITIAL_DATA_SIZES[initial_type])
-
-    # 2. havok blob.
-    if change_flags & (1 << 2):
-        cur.skip(_read_vsval(cur))
-
-    # 3-5. conditional fixed sections (no always-present block for REFR).
-    if change_flags & (1 << 0):
-        cur.skip(6)          # ChangeFormFlags
-    if change_flags & (1 << 7):
-        cur.skip(3)          # RefID base object
-    if change_flags & (1 << 4):
-        cur.skip(4)          # float32 scale
-
-    # 6. extra data.
-    if change_flags & _REFR_EXTRADATA_MASK:
-        _skip_extradata(cur)
-
-    # 7. inventory.
-    raw_items = []
-    if change_flags & ((1 << 5) | (1 << 27)):
-        expected = _read_vsval(cur)
-        for _ in range(expected):
-            try:
-                b0, b1, b2 = cur.u8(), cur.u8(), cur.u8()
-                count = cur.i32()
-                _skip_extradata(cur)
-                raw_items.append(((b0, b1, b2), count))
-            except (SaveParseError, IndexError):
-                break
-    # 8. promotion data (RefID array) -- skip if present.
-    if change_flags & (1 << 25):
-        for _ in range(_read_vsval(cur)):
-            cur.skip(3)
-    return raw_items
-
-
-def extract_merchant_inventory(path: str, location: str
-                               ) -> List[Tuple[int, int]]:
-    """Get the merchant chest inventory for the given location name.
-
-    Returns [(item formID, count)] or [] if no chest is mapped / found.
-    """
-    chest_fid = MERCHANT_CHESTS.get(location)
-    if chest_fid is None:
-        return []
-    import zlib
-    body, _info, flt_base = load_decompressed(path)
-    cur = Cursor(body, 0)
-    cur.u8()  # form version
-    cur.u32()  # plugin info size
-    for _ in range(cur.u8()):
-        cur.wstring()
-    for _ in range(cur.u16()):
-        cur.wstring()
-    # file location table
-    formid_array_off = cur.u32() - flt_base
-    cur.skip(3 * 4)  # unknown, global1, global2
-    change_forms_off = cur.u32() - flt_base
-    cur.skip(4)  # global3
-    cur.skip(3 * 4)  # table counts
-    change_form_count = cur.u32()
-    cur.skip(15 * 4)  # unused
-    fc = Cursor(body, formid_array_off)
-    formid_array = [fc.u32() for _ in range(fc.u32())]
-    cc = Cursor(body, change_forms_off)
-    for _ in range(change_form_count):
-        b0, b1, b2 = cc.u8(), cc.u8(), cc.u8()
-        change_flags = cc.u32()
-        type_byte = cc.u8()
-        _ver = cc.u8()
-        size_class = type_byte >> 6
-        if size_class == 0:
-            length1, length2 = cc.u8(), cc.u8()
-        elif size_class == 1:
-            length1, length2 = cc.u16(), cc.u16()
-        else:
-            length1, length2 = cc.u32(), cc.u32()
-        data = cc.raw(length1)
-        if length2:
-            data = zlib.decompress(data)
-        if resolve_refid(b0, b1, b2, formid_array) == chest_fid:
-            raw = parse_refr_inventory(data, change_flags, b0 >> 6)
-            return [(resolve_refid(x0, x1, x2, formid_array), count)
-                    for (x0, x1, x2), count in raw]
-    return []
 
 
 def extract_player_inventory(
@@ -1044,6 +932,14 @@ _PERK_REFIDS = {
     bytes([0x45, 0x82, 0x17]): ("poisoner", 1),    # 0x00058217
     bytes([0x45, 0x82, 0x15]): ("physician", 1),   # 0x00058215
     bytes([0x45, 0x82, 0x1D]): ("purity", 1),      # 0x0005821D
+    # Haggling ranks 1-5 (Speech tree; EDIDs Haggling00/20/40/60/80 give the
+    # skill requirement of each rank — verified against Skyrim.esm 2026-10-19)
+    bytes([0x4B, 0xE1, 0x28]): ("haggling", 1),  # 0x000BE128
+    bytes([0x4C, 0x07, 0xCE]): ("haggling", 2),  # 0x000C07CE
+    bytes([0x4C, 0x07, 0xCF]): ("haggling", 3),  # 0x000C07CF
+    bytes([0x4C, 0x07, 0xD0]): ("haggling", 4),  # 0x000C07D0
+    bytes([0x4C, 0x07, 0xD1]): ("haggling", 5),  # 0x000C07D1
+    bytes([0x45, 0x8F, 0x75]): ("allure", 1),    # 0x00058F75
 }
 
 
@@ -1145,10 +1041,11 @@ def extract_base_alchemy(path: str) -> int | None:
 
 
 def extract_perks(path: str) -> dict:
-    """Get alchemy perks from save.
+    """Get alchemy and speech perks from save.
 
     Returns {alchemist_ranks: int, benefactor: bool, poisoner: bool,
-             physician: bool, purity: bool}.
+             physician: bool, purity: bool, haggling_ranks: int,
+             allure: bool}.
     Searches player ACHR decompressed data for (rank + RefID) pairs.
     """
     result = {
@@ -1157,7 +1054,12 @@ def extract_perks(path: str) -> dict:
         "poisoner": False,
         "physician": False,
         "purity": False,
+        "haggling_ranks": 0,
+        "allure": False,
     }
+    # Perks with multiple ranks: highest rank found = total ranks taken
+    # (ranks are sequential, so rank 2 implies rank 1).
+    RANKED_PERKS = ("alchemist", "haggling")
     for fid, form_type, change_flags, data in _walk_change_forms(path):
         if fid != PLAYER_FORMID or form_type != 1:  # 1 = ACHR
             continue
@@ -1172,11 +1074,10 @@ def extract_perks(path: str) -> dict:
                 # Rank byte is immediately before the RefID
                 if idx > 0:
                     rank_byte = data[idx - 1]
-                    if perk_name == "alchemist":
+                    if perk_name in RANKED_PERKS:
                         # Count ranks: highest rank found = total ranks
-                        # (ranks are sequential, so rank 2 implies rank 1)
-                        if rank_byte >= 1 and rank > result["alchemist_ranks"]:
-                            result["alchemist_ranks"] = rank
+                        if rank_byte >= 1 and rank > result[perk_name + "_ranks"]:
+                            result[perk_name + "_ranks"] = rank
                     else:
                         # For boolean perks, rank_byte >= 1 means taken
                         if rank_byte >= 1:
@@ -1186,15 +1087,94 @@ def extract_perks(path: str) -> dict:
     return result
 
 
-def extract_known_spells(path: str) -> List[int]:
-    """Parse a save for known spells.
+def extract_player_achr(path: str) -> bytes:
+    """Return the decompressed change-form data for the player ACHR
+    (type 1, formID 0x14). Raises SaveParseError if not found."""
+    body, info, flt_base = load_decompressed(path)
+    cur = Cursor(body, 0)
+    _form_version = cur.u8()
+    _plugin_info_size = cur.u32()
+    plugin_count = cur.u8()
+    plugins = [cur.wstring() for _ in range(plugin_count)]
+    light_plugin_count = cur.u16()
+    light_plugins = [cur.wstring() for _ in range(light_plugin_count)]
+    flt = {}
+    flt["formIDArrayCountOffset"] = cur.u32() - flt_base
+    flt["unknownTable3Offset"] = cur.u32() - flt_base
+    flt["globalDataTable1Offset"] = cur.u32() - flt_base
+    flt["globalDataTable2Offset"] = cur.u32() - flt_base
+    flt["changeFormsOffset"] = cur.u32() - flt_base
+    flt["globalDataTable3Offset"] = cur.u32() - flt_base
+    flt["globalDataTable1Count"] = cur.u32()
+    flt["globalDataTable2Count"] = cur.u32()
+    flt["globalDataTable3Count"] = cur.u32()
+    flt["changeFormCount"] = cur.u32()
+    fc = Cursor(body, flt["formIDArrayCountOffset"])
+    n = fc.u32()
+    formid_array = [fc.u32() for _ in range(n)]
+    cc = Cursor(body, flt["changeFormsOffset"])
+    for _ in range(flt["changeFormCount"]):
+        b0, b1, b2 = cc.u8(), cc.u8(), cc.u8()
+        flags = cc.u32()
+        type_byte = cc.u8()
+        cc.u8()  # version
+        size_class = type_byte >> 6
+        form_type = type_byte & 0x3F
+        if size_class == 0:
+            length1, length2 = cc.u8(), cc.u8()
+        elif size_class == 1:
+            length1, length2 = cc.u16(), cc.u16()
+        elif size_class == 2:
+            length1, length2 = cc.u32(), cc.u32()
+        else:
+            raise SaveParseError("bad size class %d" % size_class)
+        data = cc.raw(length1)
+        if form_type == 1:
+            try:
+                fid = resolve_refid(b0, b1, b2, formid_array)
+            except SaveParseError:
+                fid = None
+            if fid == 0x14:
+                if length2:
+                    try:
+                        data = zlib.decompress(data)
+                    except Exception:
+                        pass
+                return data
+    raise SaveParseError("player ACHR not found")
 
-    Returns [spell_formID, ...]. From save format research (2026-10-05):
-    ChangeForms with formType 13 have change_flags=0x40 and 1 byte of data.
-    Player knows 3 spells, and there are exactly 3 type-13 ChangeForms.
 
-    Discovered via Reddit r/skyrimmods thread: known spells/enchantments are
-    tracked by a flag on the base Form record, not as a separate list.
+def extract_known_spell_fids(path: str,
+                             spell_fids: List[int]) -> List[int]:
+    """Find which of `spell_fids` the player knows.
+
+    Mechanism discovered 2026-10-19 via Ben's console experiment (he gave
+    himself all spells between two saves; the player ACHR grew 2,689 bytes):
+    LEARNED spells are stored in the player ACHR change data as 3-byte save
+    RefIDs (kind 1: [0x40|(fid>>16), (fid>>8)&0xFF, fid&0xFF]), one
+    contiguous run. Starting spells (Flames, Healing) live on the ActorBase,
+    NOT here — the caller adds those. We search for each candidate spell's
+    RefID byte pattern; ~90 patterns over ~26KB makes false positives
+    negligible (~0.1 expected).
+    """
+    achr = extract_player_achr(path)
+    found = []
+    for fid in spell_fids:
+        pat = bytes((0x40 | (fid >> 16), (fid >> 8) & 0xFF, fid & 0xFF))
+        if pat in achr:
+            found.append(fid)
+    return found
+
+
+def extract_read_books(path: str) -> List[int]:
+    """Parse a save for READ BOOKS (type 13 = BOOK, per UESP save format).
+
+    Returns [book_formID, ...]. The 'read' flag lives on the base Form record.
+    CORRECTION 2026-10-19: this is NOT known spells (misidentified 2026-10-05).
+    Verified by differential analysis: Ben read the Fast Healing spell tome
+    (0x000A271D) between two saves 20s apart, and exactly one new type-13
+    flag appeared. Spell tomes set read flags like regular books, so this
+    doubles as the 'spell tomes read' list for his don't-rebuy check.
     """
     body, info, flt_base = load_decompressed(path)
     cur = Cursor(body, 0)
@@ -1256,6 +1236,10 @@ def extract_known_spells(path: str) -> List[int]:
 
     return sorted(known)
 
+
+# ---------------------------------------------------------------------------
+# Ingredient database + potion math
+# ---------------------------------------------------------------------------
 
 def extract_known_enchantments(path: str) -> List[int]:
     """Parse a save for known enchantments (disenchanted).
@@ -1507,28 +1491,6 @@ def potion_price(effects, skill=100, alchemist_ranks=0,
     return int(total)
 
 
-def potion_price_base(effects) -> int:
-    """Legacy: sum of standard values at 100 skill, no perks."""
-    return sum(EFFECT_VALUES.get(e, 0) for e in effects)
-
-
-def _make_potion(effects, ings, skill=15, alchemist_ranks=0,
-                 benefactor=True, poisoner=True, physician=True):
-    """Build potion dict with dynamic value (player stats as defaults)."""
-    return {
-        "effects": effects,
-        "ingredients": [g["name"] for g in ings],
-        "counts": [g["count"] for g in ings],
-        # How many you can brew before one stack runs out:
-        "batches": min(g["count"] for g in ings),
-        "n": len(ings),
-        "price": potion_price(effects, skill=skill,
-                             alchemist_ranks=alchemist_ranks,
-                             benefactor=benefactor, poisoner=poisoner,
-                             physician=physician),
-    }
-
-
 def brewable_by_effect(owned: List[dict], skill=15, alchemist_ranks=0,
                        benefactor=True, poisoner=True,
                        physician=True) -> List[dict]:
@@ -1571,290 +1533,58 @@ def brewable_by_effect(owned: List[dict], skill=15, alchemist_ranks=0,
                     batches = min(owned[i]["count"], owned[j]["count"])
                     potions.append({
                         "effects": sorted(shared),
-                        "price": potion_price(sorted(shared)),
+                        # Pass skill/perks through (2026-10-19 fix: these were
+                        # silently dropped, so every price used skill=100).
+                        "price": potion_price(
+                            sorted(shared), skill=skill,
+                            alchemist_ranks=alchemist_ranks,
+                            benefactor=benefactor, poisoner=poisoner,
+                            physician=physician),
                         "ingredients": [owned[i]["name"], owned[j]["name"]],
                         "batches": batches,
                         "n": 2,
                     })
 
-    potions.sort(key=lambda p: (-p["price"], -len(p["effects"]),
-                                p["ingredients"]))
-    return potions
-
-
-def load_potion_table(path: str) -> List[dict]:
-    """Load the pre-computed valuable potion table (top_potions.json).
-
-    Generated offline via compute_potions on all 191 ingredients.
-    Each entry: {effects, price, ingredients: [names]}.
-    """
-    import os
-    if not os.path.exists(path):
-        return []
-    with open(path) as f:
-        return json.load(f)
-
-
-def brewable_from_table(owned: List[dict], potion_table: List[dict]) -> List[dict]:
-    """Find potions the player can brew.
-
-    owned: [{name, effects, count}]
-    Returns potions sorted by price desc, with batch counts based on
-    available ingredient quantities. O(T) not O(n^3).
-    """
-    owned_counts = {o["name"]: o["count"] for o in owned}
-    result = []
-    for p in potion_table:
-        ings = p["ingredients"]
-        # Check if player has all ingredients (with count > 0)
-        if not all(owned_counts.get(ing, 0) > 0 for ing in ings):
-            continue
-        # Batch count = min available across ingredients
-        # (simplified: assumes 1 unit per ingredient per potion)
-        batches = min(owned_counts.get(ing, 0) for ing in ings)
-        if batches <= 0:
-            continue
-        result.append({
-            "effects": p["effects"],
-            "price": p["price"],
-            "ingredients": ings,
-            "batches": batches,
-            "n": len(ings),
-        })
-    # Already sorted by price in the table, but ensure it
-    result.sort(key=lambda p: -p["price"])
-    return result
-
-
-def shopping_by_effect(owned: List[dict], ing_db: dict, gold: int,
-                      exclude=frozenset(), force_include=frozenset()) -> dict:
-    """Build shopping list via effect-grouping (2026-10-05 approach).
-
-    For each ingredient NOT owned, if it shares an effect with something the player
-    owns, it's a candidate. Rank by profit. O(I*E) not O(n^3).
-    """
-    owned_names = {o["name"] for o in owned}
-    owned_by_effect = {}
-    for o in owned:
-        for eff in o.get("effects", []):
-            owned_by_effect.setdefault(eff, []).append(o["name"])
-
-    suggestions = {}
-    for ing in ing_db.values():
-        name = ing["name"]
-        if name in owned_names:
-            continue
-        if name in exclude and name not in force_include:
-            continue
-        effects = ing.get("effects", [])
-        # Find the best pairing: for each shared effect, find an owned
-        # ingredient with that effect, compute the pair's potion price.
-        best_price = 0
-        best_pair = None
-        best_effects = []
-        ing_effset = set(effects)
-        for eff in effects:
-            if eff not in owned_by_effect:
+    # Triples (2026-10-19): the live list was pairs-only since the Oct 5
+    # rewrite, which starved every triple feature (rescue verdicts, 3-vs-2
+    # badges). For each pair sharing an effect, try every third ingredient:
+    # a triple is valid when an effect is shared by >=2 of the three
+    # (in-game rule). O(P*n), fine for a few dozen ingredients.
+    seen_triples = set()
+    for i, j in seen_pairs:
+        ei, ej = effsets[i], effsets[j]
+        ij = ei & ej
+        for k in range(len(owned)):
+            if k == i or k == j:
                 continue
-            for owned_name in owned_by_effect[eff]:
-                # Find the owned ingredient's full effect set
-                owned_ing = next((o for o in owned if o["name"] == owned_name), None)
-                if not owned_ing:
-                    continue
-                shared = ing_effset & set(owned_ing.get("effects", []))
-                if not shared:
-                    continue
-                price = potion_price(sorted(shared))
-                if price > best_price:
-                    best_price = price
-                    best_pair = owned_name
-                    best_effects = sorted(shared)
-        if best_price == 0:
-            continue
-        cost = ing.get("base_value", 5) * 3
-        profit = best_price * SELL_FACTOR - cost
-        if profit <= 0 and name not in force_include:
-            continue
-        if name not in suggestions or profit > suggestions[name]["profit"]:
-            suggestions[name] = {
-                "name": name,
-                "cost": cost,
-                "best_price": best_price,
-                "profit": profit,
-                "effects": effects,
-                "pairs_with": best_pair,
-                "potion_effects": best_effects,
-            }
-
-    ranked = sorted(suggestions.values(), key=lambda s: -s["profit"])
-    buys = []
-    total_cost = 0
-    for s in ranked:
-        if total_cost + s["cost"] <= gold or not buys:
-            buys.append({
-                "name": s["name"],
-                "cost": s["cost"],
-                "qty": 1,
-                "effects": s["effects"],
-                "pairs_with": s["pairs_with"],
-                "potion_effects": s["potion_effects"],
-                "potion_price": s["best_price"],
-            })
-            total_cost += s["cost"]
-            if total_cost >= gold and len(buys) >= 10:
-                break
-
-    skip = [{"name": s["name"], "cost": s["cost"], "best_price": s["best_price"]}
-            for s in ranked if s["name"] not in {b["name"] for b in buys}]
-
-    return {
-        "buys": buys,
-        "total_cost": total_cost,
-        "total_value": sum(s["best_price"] for s in ranked[:len(buys)]),
-        "total_sell": int(sum(s["best_price"] for s in ranked[:len(buys)]) * SELL_FACTOR),
-        "skip": skip[:20],
-        "gold": gold,
-        "steps": [],  # No brew steps for the simplified shopping list
-        "phases": [],
-    }
-
-
-def shopping_from_table(owned: List[dict], potion_table: List[dict],
-                        ing_db: dict, gold: int,
-                        exclude=frozenset(), force_include=frozenset()) -> dict:
-    """Build a shopping list from the pre-computed potion table.
-
-    Finds valuable potions player is exactly 1 ingredient away from brewing,
-    ranks by profit. O(T) not O(n^3).
-    Returns dict with buys, total_cost, etc. (compatible with shop plan format).
-    """
-    owned_counts = {o["name"]: o["count"] for o in owned}
-    suggestions = {}  # name -> {name, cost, best_price, profit, effects}
-
-    for p in potion_table:
-        ings = p["ingredients"]
-        # Skip if player can already brew it
-        if all(owned_counts.get(ing, 0) > 0 for ing in ings):
-            continue
-        # Find missing ingredients
-        missing = [ing for ing in ings if owned_counts.get(ing, 0) == 0]
-        if len(missing) != 1:
-            continue
-        name = missing[0]
-        if name in exclude and name not in force_include:
-            continue
-        ing_data = ing_db.get(name)
-        if not ing_data:
-            continue
-        cost = ing_data.get("base_value", 5) * 3
-        profit = p["price"] * SELL_FACTOR - cost
-        # Only suggest if profitable (or force-included)
-        if name not in force_include and profit <= 0:
-            continue
-        # Keep the best (highest profit) suggestion per ingredient
-        if name not in suggestions or profit > suggestions[name]["profit"]:
-            suggestions[name] = {
-                "name": name,
-                "cost": cost,
-                "best_price": p["price"],
-                "profit": profit,
-                "effects": ing_data["effects"],
-            }
-
-    # Sort by profit descending
-    ranked = sorted(suggestions.values(), key=lambda s: -s["profit"])
-
-    # Build buys list (respecting gold)
-    buys = []
-    total_cost = 0
-    for s in ranked:
-        if total_cost + s["cost"] <= gold or not buys:
-            # Buy at least one even if over gold (so list isn't empty)
-            buys.append({
-                "name": s["name"],
-                "cost": s["cost"],
-                "qty": 1,
-                "effects": s["effects"],
-            })
-            total_cost += s["cost"]
-            if total_cost >= gold and len(buys) >= 5:
-                break
-
-    # Don't-buy list: ingredients that didn't make the cut
-    skip = []
-    for s in ranked:
-        if s["name"] not in {b["name"] for b in buys}:
-            skip.append({
-                "name": s["name"],
-                "cost": s["cost"],
-                "best_price": s["best_price"],
+            ek = effsets[k]
+            shared = ij | (ei & ek) | (ej & ek)
+            if not shared:
+                continue
+            tkey = tuple(sorted((i, j, k)))
+            if tkey in seen_triples:
+                continue
+            seen_triples.add(tkey)
+            a, b, c = tkey
+            batches = min(owned[a]["count"], owned[b]["count"],
+                          owned[c]["count"])
+            potions.append({
+                "effects": sorted(shared),
+                # Pass skill/perks through (2026-10-19 fix: silently dropped).
+                "price": potion_price(
+                    sorted(shared), skill=skill,
+                    alchemist_ranks=alchemist_ranks,
+                    benefactor=benefactor, poisoner=poisoner,
+                    physician=physician),
+                "ingredients": [owned[a]["name"], owned[b]["name"],
+                                owned[c]["name"]],
+                "batches": batches,
+                "n": 3,
             })
 
-    return {
-        "buys": buys,
-        "total_cost": total_cost,
-        "total_value": sum(s["best_price"] for s in ranked[:len(buys)]),
-        "total_sell": int(sum(s["best_price"] for s in ranked[:len(buys)]) * SELL_FACTOR),
-        "skip": skip[:20],  # Top 20 skips
-        "gold": gold,
-    }
-
-
-def compute_potions(owned: List[dict]) -> List[dict]:
-    """Every 2- and 3-ingredient combo sharing at least one effect.
-
-    A triple yields every effect shared by at least two of the three
-    ingredients, matching in-game alchemy. Sorted by price descending.
-
-    Complexity is O(n^3) in the ingredient count, but n is the number of
-    distinct owned ingredients with count > 0 (a few dozen at most), and
-    each step is a couple of tiny set intersections -- a few thousand
-    combos, well under a second.
-    """
-    potions = []
-    n = len(owned)
-    effsets = [set(o["effects"]) for o in owned]
-    for i in range(n):
-        for j in range(i + 1, n):
-            shared = effsets[i] & effsets[j]
-            if shared:
-                potions.append(_make_potion(sorted(shared),
-                                            [owned[i], owned[j]],
-                                            skill=skill,
-                                            alchemist_ranks=alchemist_ranks,
-                                            benefactor=benefactor,
-                                            poisoner=poisoner,
-                                            physician=physician))
-    for i in range(n):
-        ei = effsets[i]
-        for j in range(i + 1, n):
-            ej = effsets[j]
-            ij = ei & ej
-            for k in range(j + 1, n):
-                ek = effsets[k]
-                # Effect appears in the potion if >=2 ingredients share it.
-                shared = ij | (ei & ek) | (ej & ek)
-                if shared:
-                    potions.append(_make_potion(
-                        sorted(shared), [owned[i], owned[j], owned[k]],
-                        skill=skill, alchemist_ranks=alchemist_ranks,
-                        benefactor=benefactor, poisoner=poisoner,
-                        physician=physician))
     potions.sort(key=lambda p: (-p["price"], -len(p["effects"]),
                                 p["ingredients"]))
     return potions
-
-
-def greedy_brew_total_static(ranked_potions: List[dict],
-                             counts: dict, min_price: int = 100) -> int:
-    """Best achievable total potion value from the ingredient counts.
-
-    Uses brew_allocation (below), not a single greedy pass.
-    ranked_potions must be sorted by price descending (compute_potions
-    output). Used for the inventory-only baseline in the shop section.
-    """
-    total, _ = brew_allocation(ranked_potions, counts, min_price)
-    return total
 
 
 def _greedy_brew(potions: List[dict], counts: dict, min_price: int = 100,
@@ -1873,16 +1603,23 @@ def _greedy_brew(potions: List[dict], counts: dict, min_price: int = 100,
         if p is banned:
             continue
         ings = p["ingredients"]
-        if all(counts.get(i, 0) > 0 for i in ings):
-            for i in ings:
-                counts[i] -= 1
-            brewed.append(p)
-            total += p["price"]
+        # Brew every possible batch (2026-10-19): the old code brewed each
+        # distinct potion at most once, stranding value when stock could
+        # make 2 (or 200) copies. Max-batches is the greedy-correct move;
+        # ruin-and-recreate still repairs the 3-vs-2 blind spot.
+        batches = min([counts.get(i, 0) for i in ings] or [0])
+        if batches <= 0:
+            continue
+        for i in ings:
+            counts[i] -= batches
+        brewed.extend([p] * batches)
+        total += p["price"] * batches
     return total, brewed
 
 
 def brew_allocation(potions: List[dict], counts: dict,
-                    min_price: int = 100) -> Tuple[int, list]:
+                    min_price: int = 100,
+                    batch_mode: bool = False) -> Tuple[int, list]:
     """Brew plan maximizing total potion value ("total haul").
 
     Plain greedy (best potion first) has a blind spot: a 3-ingredient
@@ -1899,8 +1636,26 @@ def brew_allocation(potions: List[dict], counts: dict,
        (Fixed seed => same input always gives same output.)
     Never worse than plain greedy. On a real 17-ingredient shop stock
     this reached the exact optimum (verified by branch-and-bound).
+
+    batch_mode (2026-10-19): Ben's "just batches for value" — when the
+    page sorts by total gold, order by BATCH value (price x batches) and
+    commit to full batches. Deliberately skips the ruin/polish phases:
+    those exist to squeeze marginal gold by fragmenting batches (3x50gp
+    + 1x51gp instead of 4x50gp), which is exactly the fiddliness he
+    doesn't want. Leaves a few gold on the table by design.
     """
     best_total, best_brewed = _greedy_brew(potions, counts, min_price)
+    if batch_mode:
+        # Batch mode: single greedy pass ordered by batch value.
+        # No ruin/polish — those trade batch simplicity for marginal gold.
+        in_bar = [p for p in potions if p["price"] >= min_price]
+
+        def _batch_value(p):
+            b = min([counts.get(i, 0) for i in p["ingredients"]] or [0])
+            return p["price"] * b
+
+        ordered = sorted(in_bar, key=lambda p: -_batch_value(p))
+        return _greedy_brew(ordered, counts, min_price)
     improved = True
     while improved:
         improved = False
@@ -1933,255 +1688,37 @@ def brew_allocation(potions: List[dict], counts: dict,
 # Potion list value still matters beyond gold: Alchemy XP scales with it,
 # and higher Alchemy means pricier potions and better sell prices later --
 # so the plan reports both gold and XP value, not gold alone.
+# SELL_FACTOR is the legacy flat estimate; live code uses real_sell_factor()
+# (UESP-verified Skyrim barter formula) with the player's real Speech,
+# Haggling ranks, and Allure.
 SELL_FACTOR = 0.3
 
 
-def phase_shop_plan(steps: List[dict], buys: List[dict],
-                    gold: int) -> Tuple[List[dict], List[dict]]:
-    """Split a shop plan into gold-affordable phases.
+def real_sell_factor(speech_skill: int, haggling_ranks: int, allure: bool,
+                     fortify_barter: float = 0.0) -> float:
+    """Fraction of list value a merchant actually pays, per the real Skyrim
+    barter formula (UESP: Skyrim:Speech / Skyrim:Merchants).
 
-    Player can't always afford the whole buy list at once. Each phase buys
-    the most profitable potions that fit in current gold, brews them,
-    sells them, and rolls the proceeds into the next phase:
-      grab what you can afford -> brew these -> sell -> buy more -> ...
-    Phases are ordered for maximum gp per visit: the most profitable
-    potions come first, so quitting after any phase banks the most gold.
-    Steps are tagged with their phase number (1-based, in place); steps
-    that stay unaffordable even after selling everything get phase None.
-    Returns (phases, unaffordable_steps). A single phase means the whole
-    list is affordable at once.
+        base_price_factor = 3.3 - 0.013 * min(speech, 100)
+        sell_modifier = HagglingS * AllureS * (1 + fortify_barter)
+        sell price = round(value * sell_modifier / base_price_factor)
+
+    HagglingS = 1.10/1.15/1.20/1.25/1.30 for ranks 1-5; AllureS = 1.10.
+    fortify_barter is a fraction (0.20 = +20% from gear/potions/blessing).
+    At Speech 0, no perks: 1/3.3 = 0.303. At Speech 100: 1/2.0 = 0.5.
+    (2026-10-19)
     """
-    if gold is None or gold < 0:
-        for s in steps:
-            s["phase"] = 1
-        return [], []
-    cost_map = {b["name"]: b["cost"] for b in buys}
-    annotated = []
-    for idx, s in enumerate(steps):
-        buy_cost = sum(cost_map.get(i["name"], 0)
-                       for i in s["ingredients"] if i["bought"])
-        revenue = int(s["potion_price"] * SELL_FACTOR)
-        profit = revenue - buy_cost
-        annotated.append([idx, s, buy_cost, revenue, profit])
-    # Most profitable first: maximum gp per visit.
-    annotated.sort(key=lambda x: -x[4])
-    phases = []
-    remaining = annotated
-    current_gold = gold
-    n = 1
-    while remaining:
-        in_phase = []
-        phase_cost = 0
-        rest = []
-        for item in remaining:
-            if phase_cost + item[2] <= current_gold:
-                in_phase.append(item)
-                phase_cost += item[2]
-            else:
-                rest.append(item)
-        if not in_phase:
-            break
-        phase_revenue = sum(item[3] for item in in_phase)
-        buy_names = set()
-        for _, s, _, _, _ in in_phase:
-            for ing in s["ingredients"]:
-                if ing["bought"]:
-                    buy_names.add(ing["name"])
-        phase_buys = sorted(
-            (b for b in buys if b["name"] in buy_names),
-            key=lambda b: b["name"])
-        gold_after = current_gold - phase_cost + phase_revenue
-        phases.append({
-            "n": n,
-            "buys": [{"name": b["name"], "cost": b["cost"], "qty": b["qty"],
-                      "available": b["available"]} for b in phase_buys],
-            "cost": phase_cost,
-            "revenue": phase_revenue,
-            "gold_before": current_gold,
-            "gold_after": gold_after,
-            "ranks": sorted(item[0] + 1 for item in in_phase),
-        })
-        for _, s, _, _, _ in in_phase:
-            s["phase"] = n
-        current_gold = gold_after
-        remaining = rest
-        n += 1
-    unaffordable = [s for _, s, _, _, _ in remaining]
-    for s in unaffordable:
-        s["phase"] = None
-    return phases, unaffordable
+    haggling_s = (1.0, 1.10, 1.15, 1.20, 1.25, 1.30)[
+        max(0, min(5, int(haggling_ranks)))]
+    allure_s = 1.10 if allure else 1.0
+    base = 3.3 - 0.013 * min(max(int(speech_skill), 0), 100)
+    return haggling_s * allure_s * (1.0 + max(fortify_barter, 0.0)) / base
 
 
-def shop_recommendations(owned: List[dict], chest_items: List[Tuple[str, int, int]],
-                         player_gold: int, ing_db: dict,
-                         min_price: int = 100,
-                         exclude: frozenset = frozenset(),
-                         force_include: frozenset = frozenset()) -> dict:
-    """Build a buy-and-brew plan from the merchant's chest.
-
-    owned: Player's ingredient dicts (name, effects, count).
-    chest_items: [(ingredient name, base_value, count_available)] from the
-        merchant chest.
-    ing_db: name -> ingredient dict (for effects of items player doesn't own).
-    exclude: ingredient names to skip (Player tapped X: not actually for
-        sale in the live barter menu).
-    force_include: ingredient names to buy even if not profitable
-        (Player tapped + on the Don't-buy list: they want it anyway).
-    Returns {"steps", "buys", "total_cost", "total_value", "total_sell"}:
-      buys: [{name, cost}] in buy order -- one unit each.
-      steps: potions unlocked by the purchases, in brew order; each step is
-        {potion_effects, potion_price, ingredients: [{name, bought}]} where
-        bought=True marks ingredients bought this trip (vs from inventory).
-      total_cost: gold spent. total_value: listed value of ALL potions
-        brewed from the combined pool. total_sell: realistic gold back
-        when selling those potions (list value x SELL_FACTOR) -- this is
-        the number that decides whether buying is worth it.
-      skip: [{name, cost, best_price}] -- stock that didn't make the buy
-        list, with the best potion price found (explicit Don't-buy list).
-    Buy price ~= base_value x 3 (typical low-Speech merchant markup).
-    Gold sequencing is handled by phase_shop_plan (phases in the payload),
-    not by limiting the buy set here.
-    """
-    pool = {o["name"]: {"effects": o["effects"], "count": o["count"]}
-            for o in owned}
-    owned_names = set(pool)
-    # Save owned counts before we add bought units to the pool.
-    owned_counts = {n: v["count"] for n, v in pool.items()}
-    # Drop anything player marked not-actually-for-sale.
-    chest_items = [(n, bv, a) for n, bv, a in chest_items if n not in exclude]
-
-    def effects_of(name):
-        if name in pool:
-            return pool[name]["effects"]
-        d = ing_db.get(name)
-        return d["effects"] if d else None
-
-    # Rank chest ingredients by (best potion value - buy cost), evaluated
-    # against the pool plus EVERY chest ingredient at once: the buys are
-    # a set, so bought ingredients can combine with each other, not just
-    # with the starting inventory. One compute_potions call covers all.
-    rank_pool = {n: {"effects": v["effects"], "count": v["count"]}
-                 for n, v in pool.items()}
-    for name, base_value, avail in chest_items:
-        if avail <= 0:
-            continue
-        hypo_effects = effects_of(name)
-        if not hypo_effects:
-            continue
-        if name in rank_pool:
-            rank_pool[name]["count"] += 1
-        else:
-            rank_pool[name] = {"effects": hypo_effects, "count": 1}
-    rank_list = [{"name": n, "effects": v["effects"], "count": v["count"]}
-                 for n, v in rank_pool.items()]
-    ranked_potions = compute_potions(rank_list)
-    ranked = []
-    skip_info = {}
-    for name, base_value, avail in chest_items:
-        if avail <= 0:
-            continue
-        cost = base_value * 3
-        hypo_effects = effects_of(name)
-        if not hypo_effects:
-            continue
-        best = next((p for p in ranked_potions
-                     if name in p["ingredients"] and p["price"] >= min_price),
-                    None)
-        # Worth buying only if realistic sell proceeds beat the price,
-        # unless player force-included it (tapped + on Don't-buy: they want
-        # it anyway). Gold sequencing is handled by phase_shop_plan.
-        # (List value still drives Alchemy XP -- reported separately.)
-        if name in force_include or (
-                best and best["price"] * SELL_FACTOR > cost):
-            profit = (best["price"] * SELL_FACTOR - cost) if best else 0
-            ranked.append((profit, name, cost, hypo_effects))
-        else:
-            skip_info[name] = {
-                "name": name, "cost": cost,
-                "best_price": best["price"] if best else 0,
-            }
-    ranked.sort(reverse=True)
-
-    # Take the full profitable buy set; phase_shop_plan sequences it
-    # by gold affordability.
-    buys = []
-    for _, name, cost, hypo_effects in ranked:
-        avail = next(a for n, _, a in chest_items if n == name)
-        buys.append({"name": name, "cost": cost, "effects": hypo_effects,
-                     "available": avail, "unit_cost": cost})
-    bought_names = {b["name"] for b in buys}
-
-    # Brew the combined pool greedily, best potion first.
-    # Add ALL available units to the pool -- brew_allocation will use
-    # what it needs; we prune to actual usage below.
-    for b in buys:
-        name = b["name"]
-        avail = b["available"]
-        if name in pool:
-            pool[name]["count"] += avail
-        else:
-            pool[name] = {"effects": b["effects"], "count": avail}
-    pool_list = [{"name": n, "effects": v["effects"], "count": v["count"]}
-                 for n, v in pool.items() if v["count"] > 0]
-    # Brew for maximum total value (see brew_allocation); the displayed
-    # steps are the brewed potions that use bought ingredients.
-    total_value, brewed = brew_allocation(
-        compute_potions(pool_list),
-        {n: v["count"] for n, v in pool.items() if v["count"] > 0},
-        min_price)
-    # Prune buys to ingredients the plan actually brews -- never pay for
-    # stock that goes unused. Count actual usage to set buy quantities.
-    from collections import Counter
-    used_counts = Counter()
-    for p in brewed:
-        used_counts.update(p["ingredients"])
-    # For bought ingredients, qty = bought units actually used.
-    # (brew_allocation uses from the combined pool; owned stock is used
-    # first, so bought_used = total_used - owned_count, capped at available.)
-    pruned_buys = []
-    for b in buys:
-        name = b["name"]
-        total_used = used_counts.get(name, 0)
-        owned_count = owned_counts.get(name, 0)
-        bought_used = max(0, total_used - owned_count)
-        bought_used = min(bought_used, b["available"])
-        if bought_used > 0:
-            b["qty"] = bought_used
-            b["cost"] = b["unit_cost"] * bought_used
-            pruned_buys.append(b)
-    buys = pruned_buys
-    bought_names = {b["name"] for b in buys}
-    # Ranked by potion value, highest first: #1 brews first for max XP.
-    brewed = sorted(brewed, key=lambda p: -p["price"])
-    steps = []
-    for p in brewed:
-        ings = p["ingredients"]
-        if any(i in bought_names and i not in owned_names for i in ings):
-            steps.append({
-                "potion_effects": p["effects"],
-                "potion_price": p["price"],
-                "ingredients": [
-                    {"name": i,
-                     "bought": i in bought_names and i not in owned_names}
-                    for i in ings],
-            })
-    # Split into gold-affordable phases (see phase_shop_plan); steps get
-    # a "phase" tag, phases carry the buy/brew/sell sequence.
-    phases, _ = phase_shop_plan(steps, buys, player_gold)
-    # Explicit Don't-buy list: stock that failed the profitability filter,
-    # with the best potion price found so player sees why.
-    skip = sorted(skip_info.values(), key=lambda s: s["name"])
-    return {
-        "steps": steps,
-        "buys": [{"name": b["name"], "cost": b["cost"], "qty": b["qty"],
-                  "available": b["available"]} for b in buys],
-        "total_cost": sum(b["cost"] for b in buys),
-        "total_value": total_value,
-        "total_sell": int(total_value * SELL_FACTOR),
-        "phases": phases,
-        "gold": player_gold,
-        "skip": skip,
-    }
+# Perk EDID suffixes (Haggling00/20/40/60/80, Alchemist00/20/40/60/80) are the
+# skill requirement of that rank — verified against Skyrim.esm 2026-10-19.
+# Having the rank proves the skill is at least that high.
+_PERK_SKILL_FLOOR = {1: 0, 2: 20, 3: 40, 4: 60, 5: 80}
 
 
 # ---------------------------------------------------------------------------
@@ -2195,6 +1732,267 @@ def shop_recommendations(owned: List[dict], chest_items: List[Tuple[str, int, in
 # every ingredient still has at least 1 left. Queueing deducts, removing
 # restores, and the list re-renders against what's left. No combo search
 # runs in JS, so it stays snappy on a phone.
+
+FLOW_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alchemy Companion — Flow Explorer</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; background: #14181d; color: #e8e8e8; }
+h1 { font-size: 1.3em; margin: 0 0 4px; }
+h2 { font-size: 1.1em; margin: 26px 0 8px; color: #ffd479; }
+.hint { color: #9aa4ad; font-size: 0.9em; margin: 0 0 14px; }
+a { color: #7cc4ff; }
+.node { background: #1d232a; border: 1px solid #39424c; border-radius: 10px; margin: 0 0 8px; overflow: hidden; }
+.node > .head { padding: 12px; cursor: pointer; display: flex; gap: 10px; align-items: baseline; }
+.node > .head .t { font-weight: bold; font-size: 1em; }
+.node > .head .one { color: #9aa4ad; font-size: 0.85em; }
+.node > .head .arrow { margin-left: auto; color: #7cc4ff; }
+.node > .body { display: none; padding: 0 12px 12px; border-top: 1px solid #2c343d; }
+.node.open > .body { display: block; }
+.grp { margin: 10px 0 0; }
+.grp > .gl { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.grp.reads > .gl { color: #7cc4ff; }
+.grp.writes > .gl { color: #8fe388; }
+.grp.live > .gl { color: #ffd479; }
+.vrow { padding: 5px 8px; background: #161b21; border-radius: 6px; margin-bottom: 4px; font-size: 0.9em; }
+.vrow code { color: #ffd479; font-size: 0.95em; }
+.vrow .vd { color: #9aa4ad; }
+.vrow .vv { color: #8fe388; font-weight: bold; }
+.note { margin-top: 10px; padding: 8px; background: #26200f; border-left: 3px solid #ffd479; border-radius: 0 6px 6px 0; font-size: 0.88em; color: #e8d9ae; }
+.fatcard { background: #2a1d1d; border: 1px solid #5c3434; border-radius: 10px; padding: 12px; margin: 0 0 8px; font-size: 0.92em; }
+.fatcard b { color: #ff9d9d; }
+.fatcard code { color: #ffd479; }
+.fatcard .fix { color: #9aa4ad; margin-top: 6px; }
+.connector { text-align: center; color: #4a545e; font-size: 1.2em; line-height: 1; margin: -2px 0 2px; }
+.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div class="topbar">
+<h1>🔍 Flow explorer</h1>
+<a href="/">← back to the companion</a>
+</div>
+<p class="hint">Every stage of the companion, top to bottom. Tap a stage to see the variables it <b>reads</b> and <b>writes</b>. <span style="color:#ffd479">Gold numbers</span> are live from your latest save. Built so you can point at a flaw instead of describing one.</p>
+<div id="flow"><p class="hint">Loading…</p></div>
+<h2>✂️ Fat candidates</h2>
+<p class="hint">Verified against the running code just now. Nothing here is cut — point at what goes.</p>
+<div id="fat"></div>
+<script>
+const NODES = [
+{t: "① Save file → pick_save()",
+ one: "Newest .ess wins. Right now that's Sekitty's Quicksave.",
+ r: [["SAVES_DIR", "find_saves_dir() — your Skyrim saves folder"],
+     ["*.ess mtimes", "newest Quicksave / Autosave by modification time"]],
+ w: [["save_path", "full path of the chosen save"],
+     ["save_name / save_time", "shown in the page header"]],
+ live: [["Save", d => d.save_name], ["Modified", d => d.save_time], ["Character", d => d.player]]},
+{t: "② Player block: skill + perks",
+ one: "Base Alchemy and every perk rank, read from the save — no guessing.",
+ r: [["NPC_ DNAM (52 bytes, byte 10)", "base + racial skill, before use level-ups"],
+     ["perk RefIDs", "save encoding [0x40|(fid&gt;&gt;16), (fid&gt;&gt;8)&amp;0xFF, fid&amp;0xFF]"],
+     ["Skyrim.esm PERK records", "24-byte headers; EDID suffix 00/20/40/60/80 = that rank's skill requirement"]],
+ w: [["base_skill = 20", "already auto-detected"],
+     ["alchemist_ranks = 3", "Alchemist 00/20/40"],
+     ["benefactor / poisoner / physician / purity", "✓ / ✓ / ✓ / ✗"],
+     ["haggling_ranks = 2, allure ✓", "Haggling 00/20"]],
+ live: [["Alchemist ranks", d => d.detected.alchemist_ranks],
+        ["Haggling ranks", d => d.detected.haggling_ranks],
+        ["Allure", d => d.detected.allure ? "yes" : "no"]],
+ note: "Exact current skill (with use level-ups) is NOT in the save — verified against the ReSaver reference parser. Base 20 + perk floors is the honest bound."},
+{t: "③ Skill floors from perks",
+ one: "A rank's EDID suffix proves its skill requirement. Manual settings only ratchet up.",
+ r: [["_PERK_SKILL_FLOOR", "{1:0, 2:20, 3:40, 4:60, 5:80}"],
+     ["detected ranks", "from ②"],
+     ["localStorage skyrim-alch-skill / skyrim-speech-skill", "your manual overrides"]],
+ w: [["alchemy_floor = 40", "max(manual, floor) — never down"],
+     ["speech_floor = 20", "same"],
+     ["alch_skill / speech_skill", "effective values used for all pricing"]],
+ note: "Your manual Alchemy 30 was stale — the page now raises it to 40 and tells you."},
+{t: "④ Inventory → ingredients",
+ one: "Everything you own that has alchemy effects, with counts.",
+ r: [["ACHR player blob", "change_flags 0xb8000822, inventory section"],
+     ["ingredients.json", "formID → {name, effects[4]} lookup"],
+     ["gold", "formID 0x0000000F"]],
+ w: [["owned[]", "{name, count, effects[4]} per ingredient"],
+     ["S.remaining", "{name: count} — the live stock the queue eats"]],
+ live: [["Ingredient types", d => d.ingredients.length],
+        ["Total units", d => d.ingredients.reduce((a, o) => a + o.count, 0)]]},
+{t: "⑤ Known effects",
+ one: "Which of the 4 effects per ingredient you've discovered.",
+ r: [["extract_known_ingredients()", "bitmask per formID → effect indexes 0–3"]],
+ w: [["known_effects", "{name: [idx…]} → S.knownEffects"],
+     ["markDiscovered()", "the guide adds to S.knownEffects as you brew, so later steps stay accurate"]],
+ live: [["Ingredients with known effects", d => Object.keys(d.known_effects || {}).length]]},
+{t: "⑥ brewable_by_effect()",
+ one: "Every potion you can brew: all pairs + all triples sharing an effect. Priced with YOUR skill and perks.",
+ r: [["owned", "from ④"],
+     ["skill, alchemist_ranks, benefactor, poisoner, physician", "from ② + ③"],
+     ["potion_price()", "value from effects + skill + perks"]],
+ w: [["potions[]", "{ingredients, effects, price} — pair pass, then triple pass (valid when ≥2 of the 3 share an effect)"]],
+ live: [["Potions", d => d.potions.length]],
+ note: "Oct 19 bug, fixed: both passes called potion_price() with defaults — your skill/perk settings did nothing until the fix. Prices dropped to honest values; recalibrate the slider."},
+{t: "⑦ Badges: 3-way wins?",
+ one: "Per triple: does it beat the best 2-ingredient split of its own ingredients?",
+ r: [["the triple's 3 ingredients", "best brewable pair-split of the same 3"]],
+ w: [["★ 3-way wins (green)", "triple beats the split"],
+     ["2-way: Xg (neutral)", "split wins — ties go to the split, saves an ingredient"]],
+ note: "3 hash lookups per row — profiled, not fat. Per-potion, triple ⊇ pair always; the only loss is allocation, which is the plan's job (⑫)."},
+{t: "⑧ real_sell_factor()",
+ one: "UESP barter formula. The flat 0.3 was understating your income ~40%.",
+ r: [["speech_skill", "manual (floor 20)"],
+     ["haggling_ranks = 2", "detected → HagglingS 1.20"],
+     ["allure ✓", "detected → AllureS 1.10"],
+     ["fortify_barter", "manual %"]],
+ w: [["sell_factor", "value × HagglingS × AllureS × (1+fortify) ÷ (3.3 − 0.013 × min(Speech,100))"]],
+ live: [["Sell factor", d => (+d.sell_factor).toFixed(4)],
+        ["Speech used", d => d.sell_breakdown.speech]],
+ note: "Anchors: Speech 0 → 0.303, Speech 100 → 0.500. Yours at Speech 25: 0.4252."},
+{t: "⑨ /api/data → last_good",
+ one: "Runs on every Refresh. Assembles the payload; /api/plan reads last_good.",
+ r: [["stages ②–⑧", "everything above"]],
+ w: [["payload → last_good", "{save, player, ingredients, potions, known_effects, known_enchantments, detected, sell_factor, sell_breakdown}"]]},
+{t: "⑩ Client state S",
+ one: "Everything the page remembers between renders.",
+ r: [["/api/data payload", "from ⑨"],
+     ["localStorage", "skyrim-alch-skill, skyrim-speech-skill, skyrim-fortify-barter, skyrim-minvalue, skyrim-sortmode, exclusions"]],
+ w: [["S.data", "the payload"],
+     ["S.remaining", "live stock {name: count}"],
+     ["S.knownEffects", "discoveries"],
+     ["S.queue[]", "{key, price, ingredients, effects, qty}"],
+     ["S.plan", "last computed plan"],
+     ["S.neverBrew", "ingredients to hoard (daedra hearts) — Ingredients tab 🚫 toggle, localStorage skyrim-neverbrew"],
+     ["S.sort", "{key: price | total, dir}"]]},
+{t: "⑪ Tabs",
+ one: "Four views over the same S.",
+ r: [["S", "from ⑩"]],
+ w: [["Potions tab", "min-value slider → filter; sort toggle: per-potion | total (price × batchesLeft(p)); batchesLeft(p) = max batches from S.remaining"],
+     ["Ingredients tab", "verdict vs slider: 'best brew Xg ✓' / 'best Yg → triple +A +B: Zg ✓' / 'best Yg — below your bar' / 'no brewable potion'; x0 rows get none"],
+     ["Effects tab", "effect → ingredients that have it"],
+     ["💎 tab", "known enchantments list + 'Spells you know' (buyable-tome spells the player knows, from player ACHR spell RefIDs ∩ buyable_spells.json)"]]},
+{t: "⑫ /api/plan → brew_allocation()",
+ one: "On demand only ('Best plan'). Picks the SET for maximum gold — the order comes later.",
+ r: [["last_good.potions", "pre-filtered to price ≥ min_price — the 4× speedup"],
+     ["counts", "from last_good.ingredients, with S.neverBrew zeroed out"],
+     ["min_price", "your slider"]],
+ w: [["brews[]", "{ingredients, effects, price, qty} — repeats collapsed ×N, richest first"],
+     ["total_value / total_sell", "list value + realistic sell"]],
+ note: "Greedy + ruin-and-recreate polish. Multi-batch: max batches per potion. The pre-filter also fixed a +763g early-break quirk at the 300g bar. <b>Batch mode</b> (sort=total): single greedy pass ordered by batch value (price × batches), whole batches only — leaves a few gold on the table to avoid fiddly fragmentation."},
+{t: "⑬ planBrewsSorted()",
+ one: "'Best plan' display + 'Queue it all' follow your sort toggle. Same brews, same gold — only the sequence changes.",
+ r: [["S.sort.key", "per-potion → price desc (fastest Alchemy XP); total → price × qty desc (gold right now)"],
+     ["plan.brews", "untouched — sorts a copy"]],
+ w: [["ordered brews", "what you see is what gets queued"]]},
+{t: "⑭ Queue",
+ one: "'Queue it all' in one tap. Removing an entry restores its ingredients — unless the guide consumed them.",
+ r: [["ordered brews", "from ⑬"], ["S.remaining", "consumed as items queue"]],
+ w: [["S.queue[]", "entries with qty"],
+     ["queueOne()", "single add"],
+     ["dequeue (✕)", "restores ingredients — manual removal only"]]},
+{t: "⑮ Guided brew (G)",
+ one: "One step per queue entry. Big ingredients, alphabetical. 'Brewed it' = the whole batch.",
+ r: [["S.queue", "one step per entry — qty kept, not expanded"]],
+ w: [["G.steps[]", "{price, ingredients, effects, qty, qref}"],
+     ["G.idx", "entry position"],
+     ["G.brewedGold", "+= price × qty per tap"],
+     ["header", "'✓ N brewed of M' — completed count via brewsDone()/brewsTotal()"],
+     ["markDiscovered()", "new effects → S.knownEffects"]],
+ note: "Done screen: Quicksave (F5) in-game, then Refresh."}
+];
+const FAT = [
+{t: "✓ CUT 2026-10-19 — shop payload — computed every Refresh, displayed never",
+ d: "<code>read_current()</code> runs <code>shopping_by_effect()</code> + a baseline greedy loop on <b>every</b> /api/data call. The 'One ingredient away' render block was killed Oct 19 — zero JS references to <code>.shop</code> remain.",
+ f: "Delete the block (or stop calling it) and the payload shrinks with it."},
+{t: "✓ RESOLVED 2026-10-19 — spell tomes read (was: known_spells, mislabeled)",
+ d: "The type-13 change forms are <b>books the player has read</b> (UESP: type 13 = BOOK). Oct 5 misidentified them as known spells; Oct 19 the three FormIDs resolved to regular books. But Ben's save-diff experiment proved the useful part: reading the Fast Healing <b>spell tome</b> (0x000A271D) set a type-13 flag. So the 'don't buy duplicate tomes' list = type-13 flags ∩ spell-tome IDs (spell_tomes.json) — now live in the 💎 tab as 'Spell tomes read', separate from enchantments. Starting spells (Flames, Healing) aren't covered — he knows them without reading tomes.",
+ f: "Keep the tomb-ID list in sync if DLC tomes matter."},
+{t: "✓ CUT 2026-10-19 — extract_merchant_inventory() + MERCHANT_CHESTS — dead on arrival",
+ d: "Defined, never called. Merchant stock is unknowable (Oct 5 finding stands); only Arcadia's chest was ever mapped.",
+ f: "Delete the function and the dict."},
+{t: "✓ CUT 2026-10-19 — Shopping-subsystem leftovers",
+ d: "<code>shop_recommendations()</code>, <code>phase_shop_plan()</code>, <code>shopping_from_table()</code>, <code>brewable_from_table()</code>, <code>load_potion_table()</code>, <code>greedy_brew_total_static()</code> — no live callers anywhere.",
+ f: "Delete; git history keeps them if the shop list ever comes back."},
+{t: "✓ CUT 2026-10-19 — compute_potions() — legacy O(n³)",
+ d: "Superseded by <code>brewable_by_effect()</code>. Only used by the <code>--once</code> CLI debug path — never in server mode.",
+ f: "Keep for CLI debugging, or delete."},
+{t: "✓ CUT 2026-10-19 — Shop exclusion machinery — orphaned",
+ d: "<code>getExcluded/setExcluded</code>, the <code>skyrim-shop-excluded / -forced / -loc</code> keys, and the exclusion params sent with every /api/data request. The ✕-on-a-buy UI died with the shop list.",
+ f: "Delete, or revive if the shop list returns."},
+{t: "SELL_FACTOR = 0.3 — demoted, not dead",
+ d: "Still the fallback in /api/plan and inside the dead shop paths. Live code uses <code>real_sell_factor()</code>.",
+ f: "Harmless — keep as the fallback."}
+];
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+function renderNodes() {
+  const el = document.getElementById("flow");
+  el.innerHTML = "";
+  NODES.forEach((n, i) => {
+    const d = document.createElement("div");
+    d.className = "node";
+    let h = "<div class='head'><span class='t'>" + esc(n.t) + "</span>" +
+            "<span class='arrow'>▸</span></div>" +
+            "<div style='padding:0 12px 10px'><span class='one'>" + n.one + "</span></div>" +
+            "<div class='body'>";
+    const grp = (cls, label, rows, live) => {
+      let g = "<div class='grp " + cls + "'><div class='gl'>" + label + "</div>";
+      rows.forEach(r => {
+        g += "<div class='vrow'><code>" + r[0] + "</code> <span class='vd'>" + r[1] + "</span>" +
+             (live ? " <span class='vv'>" + esc(live) + "</span>" : "") + "</div>";
+      });
+      return g + "</div>";
+    };
+    h += grp("reads", "Reads", n.r) + grp("writes", "Writes", n.w);
+    h += "<div class='grp live' id='live-" + i + "'><div class='gl'>Live</div><div class='vrow'><span class='vd'>fetching /api/data…</span></div></div>";
+    if (n.note) h += "<div class='note'>" + n.note + "</div>";
+    d.innerHTML = h + "</div>";
+    d.querySelector(".head").addEventListener("click", () => d.classList.toggle("open"));
+    el.appendChild(d);
+    if (i < NODES.length - 1) {
+      const c = document.createElement("div");
+      c.className = "connector"; c.textContent = "▼";
+      el.appendChild(c);
+    }
+  });
+}
+function renderFat() {
+  const el = document.getElementById("fat");
+  el.innerHTML = "";
+  FAT.forEach((f, i) => {
+    const d = document.createElement("div");
+    d.className = "fatcard";
+    d.innerHTML = "<b>#" + (i + 1) + " " + esc(f.t) + "</b><div style='margin-top:6px'>" + f.d + "</div>" +
+                  "<div class='fix'>→ " + f.f + "</div>";
+    el.appendChild(d);
+  });
+}
+function fillLive(D) {
+  NODES.forEach((n, i) => {
+    const el = document.getElementById("live-" + i);
+    if (!el || !n.live) { if (el) el.innerHTML = "<div class='gl'>Live</div><div class='vrow'><span class='vd'>—</span></div>"; return; }
+    let h = "<div class='gl'>Live</div>";
+    n.live.forEach(L => {
+      let v = "—";
+      try { v = L[1](D); } catch (e) { v = "n/a"; }
+      h += "<div class='vrow'><span class='vd'>" + esc(L[0]) + ":</span> <span class='vv'>" + esc(v) + "</span></div>";
+    });
+    el.innerHTML = h;
+  });
+}
+renderNodes();
+renderFat();
+fetch("/api/data").then(r => r.json()).then(D => {
+  if (D && D.ok) fillLive(D);
+  else document.querySelectorAll(".grp.live").forEach(e => e.innerHTML = "<div class='gl'>Live</div><div class='vrow'><span class='vd'>/api/data failed</span></div>");
+}).catch(() => {
+  document.querySelectorAll(".grp.live").forEach(e => e.innerHTML = "<div class='gl'>Live</div><div class='vrow'><span class='vd'>could not reach /api/data</span></div>");
+});
+</script>
+</body>
+</html>
+"""
+
 
 PAGE_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -2232,7 +2030,7 @@ PAGE_HTML = """<!DOCTYPE html>
   }
   nav.tabs button.active { background: #2a241a; color: #ffe9b0; font-weight: bold; }
   .threshold-bar {
-    display: flex; align-items: center; gap: 0.8rem;
+    display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
     padding: 0.6rem 1rem; color: #c9b98a; font-size: 0.9rem;
   }
   .threshold-bar input[type="range"] { flex: 1; max-width: 320px; accent-color: #c9a227; }
@@ -2277,6 +2075,40 @@ PAGE_HTML = """<!DOCTYPE html>
     border-radius: 1rem; background: #3a2a1a; color: #ffcc80;
     margin-left: 0.5rem;
   }
+  /* 3-way vs 2-way comparison badge (2026-10-19): on a 3-ingredient row,
+     shows whether brewing it beats the best 2-ingredient split of its
+     own ingredients (green), or what the best split earns (neutral). */
+  .splitbadge {
+    display: inline-block; font-size: 0.75rem; padding: 0.1rem 0.5rem;
+    border-radius: 1rem; background: #1a1610; color: #b7a888;
+    border: 1px solid #3a3226; margin-top: 0.25rem; white-space: nowrap;
+  }
+  .splitbadge.win { background: #2a3a1a; color: #b0d080; border-color: #5a7a3a; }
+  /* ROI on shop buys (2026-10-19) */
+  .roi {
+    display: inline-block; font-size: 0.8rem; padding: 0.1rem 0.5rem;
+    border-radius: 1rem; background: #2a3a1a; color: #b0d080;
+    border: 1px solid #5a7a3a; margin-left: 0.4rem; white-space: nowrap;
+  }
+  /* Ingredient best-brew verdict (2026-10-19) */
+  .ingverdict { font-size: 0.8rem; color: #b7a888; margin-top: 0.2rem; }
+  .ingverdict b { color: #ffe9b0; }
+  .ingverdict.deadweight { color: #8a7a66; }
+  /* Never-brew toggle (2026-10-19): dim until armed. */
+  .nb { background: none; border: none; cursor: pointer; font-size: 1rem;
+        opacity: 0.25; padding: 0 2px; }
+  .nb.on { opacity: 1; }
+  /* Optimal brew plan (2026-10-19) */
+  #plan {
+    margin: 0.7rem 0; padding: 0.6rem 0.7rem;
+    background: #1a1e2a; border: 1px solid #4a5a7a; border-radius: 0.6rem;
+  }
+  #plan h3 { margin: 0 0 0.4rem; font-size: 1rem; color: #cfe0e8; }
+  #plan .p-total { color: #ffe9b0; font-weight: bold; }
+  #plan ol { margin: 0.4rem 0; padding-left: 1.4rem; font-size: 0.92rem; }
+  #plan li { margin-bottom: 0.3rem; }
+  #plan .p-price { color: #ffd97a; font-weight: bold; white-space: nowrap; }
+  #plan .p-rowbtns { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
   main { padding: 0 1rem; }
   section.tab { display: none; }
   section.tab.active { display: block; }
@@ -2299,6 +2131,35 @@ PAGE_HTML = """<!DOCTYPE html>
     font-size: 1rem; padding: 0.35rem 0.7rem; border-radius: 0.45rem;
     border: 1px solid #6b5d43; background: #2a241a; color: #ffe9b0;
     cursor: pointer; min-width: 44px; min-height: 44px;
+  }
+  /* Sort-mode select in the threshold bar (2026-10-19): per-potion value
+     (fastest alchemy leveling when brewing everything) vs total brewable
+     gold (price x batches, for "I need 10,000 gold right now"). */
+  .threshold-bar select {
+    font-size: 0.9rem; padding: 0.5rem; border-radius: 0.5rem;
+    border: 1px solid #6b5d43; background: #1d1913; color: #e8ddc9;
+    min-height: 44px;
+  }
+  /* Guided brew mode (2026-10-19): step through the queue one potion at a
+     time, ingredients big and alphabetical to match the in-game menu. */
+  #guide {
+    margin: 0.7rem 0; padding: 1rem;
+    background: #1a2233; border: 1px solid #4a5a7a; border-radius: 0.6rem;
+  }
+  #guide .g-step { color: #8a9a86; font-size: 0.9rem; }
+  #guide .g-potion { font-size: 1.25rem; margin: 0.5rem 0; color: #ffe9b0; }
+  #guide .g-potion .g-eff { font-size: 0.85rem; color: #9a8f76; }
+  #guide .g-ings { display: flex; flex-direction: column; gap: 0.6rem;
+    margin: 1rem 0; }
+  #guide .g-ing {
+    font-size: 1.3rem; padding: 1rem 1.2rem; border-radius: 0.6rem;
+    border: 2px solid #4a6b43; background: #1d2a1a; color: #e8ddc9;
+    text-align: left;
+  }
+  #guide .g-ing.ing-discovery { border-color: #8fd08f; }
+  #guide .g-rowbtns { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  #guide .g-next {
+    font-size: 1.1rem; padding: 0.8rem 1.4rem; min-height: 56px;
   }
 
   /* Controls */
@@ -2366,6 +2227,7 @@ PAGE_HTML = """<!DOCTYPE html>
   <h1>&#9875; Skyrim Alchemy Companion</h1>
   <button id="refresh">&#8635; Refresh from latest save</button>
   <button id="shutdown" title="Stop the companion server">&#9199; Quit</button>
+  <a href="/flow" title="Explorable flowchart of every variable" style="margin-left:8px;font-size:0.85em">&#128269; flow</a>
   <div id="status">Loading&hellip;</div>
 </header>
 <div id="error"></div>
@@ -2374,9 +2236,12 @@ PAGE_HTML = """<!DOCTYPE html>
   <h3>&#129514; Brew Queue <span class="badge" id="q-count">0</span>
     &nbsp;<span class="q-total" id="q-total"></span>
     <button class="qbtn" id="q-clear" style="float:right">Clear</button>
+    <button class="qbtn" id="q-guide" style="float:right;margin-right:0.4rem"
+      title="Step through the queue one potion at a time">&#9654; Guide</button>
   </h3>
   <div id="q-list"></div>
 </div>
+<div id="guide" hidden></div>
 
 <nav class="tabs">
   <button id="tabbtn-price" class="active">&#128176; Potions</button>
@@ -2388,6 +2253,11 @@ PAGE_HTML = """<!DOCTYPE html>
     <div class="threshold-bar">
       <label for="minval">Min value: <span id="minval-show">0</span>g</label>
       <input type="range" id="minval" min="0" max="1000" step="25" value="0">
+      <select id="sortmode" title="Sort the potion list">
+        <option value="per">Sort: per potion</option>
+        <option value="total">Sort: total gold</option>
+      </select>
+      <button id="planbtn" class="btn" title="Compute the optimal brew order for maximum profit">Best plan</button>
     </div>
     <details class="alchemy-settings">
       <summary>⚗️ Alchemy skill & perks (affects potion values)</summary>
@@ -2402,12 +2272,23 @@ PAGE_HTML = """<!DOCTYPE html>
         <button id="alch-reset-detected" title="Reset to values detected from save">Reset to detected</button>
       </div>
     </details>
+    <details class="alchemy-settings">
+      <summary>💰 Selling (real merchant prices)</summary>
+      <div id="sell-detected" class="hint" style="margin-bottom:0.5rem"></div>
+      <div class="settings-grid">
+        <label>Speech skill: <input type="number" id="speech-skill" min="15" max="100" value="15" style="width:4rem"></label>
+        <label>Fortify Barter %: <input type="number" id="fortify-barter" min="0" max="200" value="0" style="width:4rem" title="Total % from gear, potions, and blessings (e.g. 20 = +20%)"></label>
+        <button id="sell-apply">Apply</button>
+      </div>
+      <div class="hint">Haggling ranks and Allure auto-detect from your save. The old flat "sells at 30%" estimate is gone — sell values now use the real barter formula.</div>
+    </details>
     <div class="controls">
       <input id="search" type="search" placeholder="Filter: effect or ingredient&hellip;" autocomplete="off">
       <select id="ingfilter"><option value="">All ingredients</option></select>
     </div>
     <h2 id="potion-h">Potions you can brew</h2>
     <div class="hint">Tap a column header to sort. Tap <b>+</b> to queue a brew &mdash; ingredients are deducted and the list updates.</div>
+    <div id="plan" hidden></div>
     <div id="potions"></div>
     <details class="ings">
       <summary id="ing-h">Your ingredients</summary>
@@ -2419,6 +2300,9 @@ PAGE_HTML = """<!DOCTYPE html>
     <h2>Known Enchantments</h2>
     <div class="hint">Enchantments you've learned via disenchanting. Auto-detected from save.</div>
     <div id="known-enchantments"></div>
+    <h2 style="margin-top:18px">Spells you know</h2>
+    <div class="hint">Spell tomes you've already read — no need to buy these again. Auto-detected from save. Spells an NPC taught you directly (like Faralda's College entry test) have no tome, so they won't show here.</div>
+    <div id="spell-tomes-read"></div>
   </section>
 </main>
 
@@ -2431,6 +2315,7 @@ const ROW_CAP = 400;  // max potion rows rendered at once (keeps phones snappy)
 const S = {
   data: null,        // last good server payload (the parsed "total" inventory)
   remaining: {},     // ingredient name -> count left after queued brews
+  neverBrew: new Set(), // ingredients to hoard, never brew (localStorage)
   queue: [],         // [{key, price, ingredients, effects, qty}]
   tab: "price",
   sort: { key: "price", dir: -1 },        // price tab: price desc by default
@@ -2443,29 +2328,6 @@ const S = {
   // Maps ingredient name -> list of known effect indexes (0-3).
   knownEffects: {},
 };
-
-// Per-shop "not actually for sale" exclusions (player taps X on a buy).
-function getExcluded(location) {
-  const all = JSON.parse(localStorage.getItem("skyrim-shop-excluded") || "{}");
-  return new Set(all[location] || []);
-}
-function setExcluded(location, set) {
-  const all = JSON.parse(localStorage.getItem("skyrim-shop-excluded") || "{}");
-  if (set.size) all[location] = [...set];
-  else delete all[location];
-  localStorage.setItem("skyrim-shop-excluded", JSON.stringify(all));
-}
-// Force-include: Player tapped + on the Don't-buy list (wants it anyway).
-function getForced(location) {
-  const all = JSON.parse(localStorage.getItem("skyrim-shop-forced") || "{}");
-  return new Set(all[location] || []);
-}
-function setForced(location, set) {
-  const all = JSON.parse(localStorage.getItem("skyrim-shop-forced") || "{}");
-  if (set.size) all[location] = [...set];
-  else delete all[location];
-  localStorage.setItem("skyrim-shop-forced", JSON.stringify(all));
-}
 
 function isKnown(ingName, effect) {
   // S.knownEffects maps name -> list of known effect INDEXES (0-3) from the save.
@@ -2497,8 +2359,19 @@ function showError(msg) {
 }
 
 // ------------------------------------------------------------ queue logic
+// Never-brew list (2026-10-19): ingredients Ben wants to hoard
+// (daedra hearts...). Toggled per row on the Ingredients tab,
+// persisted, honored by brewable(), batchesLeft(), and /api/plan.
+function getNeverBrew() {
+  try { return new Set(JSON.parse(localStorage.getItem("skyrim-neverbrew") || "[]")); }
+  catch (e) { return new Set(); }
+}
+function setNeverBrew(set) {
+  localStorage.setItem("skyrim-neverbrew", JSON.stringify([...set]));
+}
 function brewable(p) {
   for (const nm of p.ingredients) {
+    if (S.neverBrew.has(nm)) return false;
     if ((S.remaining[nm] || 0) < 1) return false;
   }
   return true;
@@ -2506,7 +2379,10 @@ function brewable(p) {
 
 function batchesLeft(p) {
   let m = Infinity;
-  for (const nm of p.ingredients) m = Math.min(m, S.remaining[nm] || 0);
+  for (const nm of p.ingredients) {
+    if (S.neverBrew.has(nm)) return 0;
+    m = Math.min(m, S.remaining[nm] || 0);
+  }
   return m;
 }
 
@@ -2514,15 +2390,19 @@ function potionKey(p) {
   return p.ingredients.join("\x01") + "\x02" + p.effects.join("\x01");
 }
 
-function brew(p) {
-  if (!brewable(p)) return;
+function queueOne(p) {
+  if (!brewable(p)) return false;
   for (const nm of p.ingredients) S.remaining[nm]--;
   const k = potionKey(p);
   const q = S.queue.find((e) => e.key === k);
   if (q) q.qty++;
   else S.queue.push({ key: k, price: p.price, ingredients: p.ingredients.slice(),
                       effects: p.effects.slice(), qty: 1 });
-  renderAll();
+  return true;
+}
+
+function brew(p) {
+  if (queueOne(p)) renderAll();
 }
 
 function unbrew(i) {
@@ -2547,6 +2427,10 @@ function sortPotions(list, st) {
   const key = st.key;
   const val = (p) => {
     if (key === "price") return p.price;
+    // "total" (2026-10-19): gold extractable if you brewed every possible
+    // batch of this potion from current stock. For the "I need 10,000 gold
+    // right now" sort; per-potion stays the fastest-alchemy-leveling order.
+    if (key === "total") return p.price * batchesLeft(p);
     if (key === "n") return p.n;
     if (key === "ingredients") return p.ingredients.join(" ").toLowerCase();
     if (key === "effects") return p.effects.join(" ").toLowerCase();
@@ -2605,8 +2489,41 @@ function potionTable(potions, st, onSort, showCap) {
     const tr = document.createElement("tr");
     const tdP = document.createElement("td");
     tdP.className = "price";
-    tdP.textContent = p.price;
+    // Total-sort mode (2026-10-19): lead with extractable gold, per-potion
+    // value as the sub-line.
+    if (S.sort.key === "total") {
+      const b = batchesLeft(p);
+      tdP.innerHTML = (p.price * b) +
+        "<div style='font-size:0.75rem;color:#8a9a86;font-weight:normal'>" +
+        p.price + "g \u00d7 " + b + "</div>";
+    } else {
+      tdP.textContent = p.price;
+    }
     tr.appendChild(tdP);
+    // 3-way vs 2-way badge (2026-10-19): compare this 3-ingredient brew
+    // against the best 2-ingredient potion brewable from its own ingredients.
+    if (p.ingredients.length === 3 && S.pairBest) {
+      const nm = p.ingredients.slice().sort();
+      let best = 0;
+      const pairs = [[nm[0], nm[1]], [nm[0], nm[2]], [nm[1], nm[2]]];
+      for (const pr of pairs) {
+        const v = S.pairBest[pr.join("\x01")] || 0;
+        if (v > best) best = v;
+      }
+      if (best > 0) {
+        const tag = document.createElement("div");
+        if (p.price > best) {
+          tag.className = "splitbadge win";
+          tag.textContent = "\u2605 3-way wins";
+          tag.title = "This 3-ingredient brew (" + p.price + "g) beats the best 2-way split (" + best + "g).";
+        } else {
+          tag.className = "splitbadge";
+          tag.textContent = "2-way: " + best + "g";
+          tag.title = "Brewing the best pair instead earns " + best + "g vs " + p.price + "g for the triple (and saves an ingredient).";
+        }
+        tdP.appendChild(tag);
+      }
+    }
 
     const tdI = document.createElement("td");
     tdI.className = "ings";
@@ -2689,7 +2606,14 @@ function filteredPricePotions() {
 function onSortPrice(col) {
   if (S.sort.key === col) S.sort.dir = -S.sort.dir;
   else S.sort = { key: col, dir: col === "price" ? -1 : 1 };
+  syncSortSelect();
   renderPriceTab();
+}
+
+// Keep the sort-mode select showing the real sort (2026-10-19).
+function syncSortSelect() {
+  const sel = $("sortmode");
+  if (sel) sel.value = S.sort.key === "total" ? "total" : "per";
 }
 
 
@@ -2697,34 +2621,27 @@ function renderPriceTab() {
   const list = filteredPricePotions();
   const el = $("potions");
   el.innerHTML = "";
+  syncSortSelect();
 
-  // "One ingredient away" section at the top (2026-10-05):
-  // If you had X, it would combine with Y for a Zg potion.
-  const oneAway = (S.data.shop && S.data.shop.plan && S.data.shop.plan.buys) || [];
-  if (oneAway.length) {
-    const hdr = document.createElement("h3");
-    hdr.textContent = "One ingredient away — consider picking up:";
-    hdr.style.marginTop = "0";
-    el.appendChild(hdr);
-    const ul = document.createElement("ul");
-    ul.style.listStyle = "none";
-    ul.style.paddingLeft = "0";
-    oneAway.slice(0, 5).forEach((b) => {
-      const li = document.createElement("li");
-      li.style.marginBottom = "8px";
-      li.innerHTML = "If you had <b>" + escapeHtml(b.name) + "</b> (" + b.cost + "g), " +
-        "it would combine with <b>" + escapeHtml(b.pairs_with || "?") + "</b> " +
-        "for a <b>" + b.potion_price + "g</b> " +
-        escapeHtml((b.potion_effects || []).join(" + ")) + " potion.";
-      ul.appendChild(li);
-    });
-    el.appendChild(ul);
-    const hr = document.createElement("hr");
-    el.appendChild(hr);
-  }
+  // "One ingredient away" shopping list — REMOVED 2026-10-19 at Ben's
+  // request ("the page is getting a little crowded... not useful most of
+  // the time"). The server still computes it (cheap); this just stops
+  // rendering it. The ROI/triple/search work on it stays in git history.
 
   $("potion-h").innerHTML = "Potions you can brew " +
     "<span class='badge'>" + list.length + "</span>";
+  // 3-way vs 2-way comparison (2026-10-19): for every brewable 2-ingredient
+  // potion, record the best price per sorted ingredient pair. potionTable
+  // uses it to badge 3-ingredient rows against their best 2-way split.
+  // Recomputed every render so it tracks the remaining pool and min value.
+  const pairBest = {};
+  for (const q of S.data.potions) {
+    if (q.ingredients.length !== 2 || q.price < S.minValue) continue;
+    if (!brewable(q)) continue;
+    const k = q.ingredients.slice().sort().join("\x01");
+    if (!(k in pairBest) || q.price > pairBest[k]) pairBest[k] = q.price;
+  }
+  S.pairBest = pairBest;
   el.appendChild(potionTable(list, S.sort, onSortPrice, true));
 }
 
@@ -2762,6 +2679,279 @@ function renderQueue() {
   });
 }
 
+// ------------------------------------------------- guided brew mode (2026-10-19)
+// Ben brews the whole queue at once; this walks him through it one potion
+// at a time. Ingredients are big and alphabetical (matches the in-game
+// alchemy menu order); tap each as it's selected in-game. The discovery
+// highlight is the same one the main list uses (ingredient gets the green
+// background when brewing would reveal an unknown effect).
+const G = { steps: [], idx: 0, brewedGold: 0, active: false };
+
+// ingredient name -> newly revealed effect (or null), mirroring the
+// wouldDiscover logic in potionTable so the two lists always agree.
+function stepDiscoveries(st) {
+  const out = {};
+  for (const nm of st.ingredients) {
+    out[nm] = null;
+    const ingData = S.data.ingredients.find((g) => g.name === nm);
+    if (!ingData) continue;
+    for (const eff of st.effects) {
+      if (ingData.effects.indexOf(eff) !== -1 && !isKnown(nm, eff)) {
+        out[nm] = eff;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+// He really brewed it in-game, so the revealed effects are now known.
+// Keeps later steps' highlighting accurate without a save refresh.
+function markDiscovered(st) {
+  for (const nm of st.ingredients) {
+    const ingData = S.data.ingredients.find((g) => g.name === nm);
+    if (!ingData) continue;
+    if (!S.knownEffects[nm]) S.knownEffects[nm] = [];
+    const known = S.knownEffects[nm];
+    for (const eff of st.effects) {
+      const idx = ingData.effects.indexOf(eff);
+      if (idx !== -1 && known.indexOf(idx) === -1) known.push(idx);
+    }
+  }
+}
+
+function startGuide() {
+  if (!S.queue.length) return;
+  G.steps = [];
+  // One step per queue entry (2026-10-19: Ben brews the whole batch in-game,
+  // so "Brewed it" completes the batch — no per-copy steps).
+  S.queue.forEach((q) => {
+    G.steps.push({ price: q.price, ingredients: q.ingredients.slice(),
+                   effects: q.effects.slice(), qty: q.qty, qref: q });
+  });
+  G.idx = 0;
+  G.brewedGold = 0;
+  G.active = true;
+  document.querySelector("main").hidden = true;
+  document.querySelector("nav.tabs").hidden = true;
+  $("queue").hidden = true;
+  $("guide").hidden = false;
+  renderGuideStep();
+}
+
+// Completed brews (not position) for the guide header (2026-10-19).
+function brewsDone() {
+  let n = 0;
+  for (let i = 0; i < G.idx; i++) n += G.steps[i].qty;
+  return n;
+}
+function brewsTotal() {
+  return G.steps.reduce((a, s) => a + s.qty, 0);
+}
+
+function renderGuideStep() {
+  const el = $("guide");
+  const st = G.steps[G.idx];
+  el.innerHTML = "";
+  const h = document.createElement("div");
+  h.className = "g-step";
+  // Completed count, never position: "Brew 2 of 14" read as "2 brewed",
+  // which was the off-by-one Ben saw. This starts at 0 and only moves
+  // when he taps "Brewed it".
+  h.textContent = "\u2713 " + brewsDone() + " brewed of " + brewsTotal() +
+    (G.brewedGold ? " \u2014 " + G.brewedGold + "g so far" : "");
+  el.appendChild(h);
+  const title = document.createElement("div");
+  title.className = "g-potion";
+  title.innerHTML = (st.qty > 1 ? "Brew <b>\u00d7" + st.qty + "</b> " : "") +
+    "<b>" + st.price + "g</b> <span class='g-eff'>" +
+    st.effects.map(escapeHtml).join(" + ") + "</span>";
+  el.appendChild(title);
+  const discoveries = stepDiscoveries(st);
+  const ings = st.ingredients.slice().sort((a, b) => a.localeCompare(b));
+  const box = document.createElement("div");
+  box.className = "g-ings";
+  // Static display (2026-10-19: Ben ditched the tap-to-check — the step is
+  // offscreen the instant he hits Next, so the effect never earned its keep).
+  ings.forEach((nm) => {
+    const d = document.createElement("div");
+    d.className = "g-ing" + (discoveries[nm] ? " ing-discovery" : "");
+    d.innerHTML = escapeHtml(nm) +
+      (discoveries[nm] ? " <span class='discover-badge'>\u2605 discovers " +
+        escapeHtml(discoveries[nm]) + "</span>" : "");
+    box.appendChild(d);
+  });
+  el.appendChild(box);
+  const row = document.createElement("div");
+  row.className = "g-rowbtns";
+  const nextBtn = document.createElement("button");
+  nextBtn.className = "btn g-next";
+  nextBtn.textContent = (G.idx + 1 === G.steps.length)
+    ? "\u2713 Brewed it \u2014 finish" : "\u2713 Brewed it \u2014 next";
+  nextBtn.title = "Tap after crafting this potion in-game";
+  nextBtn.addEventListener("click", guideBrewed);
+  const skip = document.createElement("button");
+  skip.className = "btn";
+  skip.textContent = "Skip";
+  skip.title = "Skip this brew (stays in the queue)";
+  skip.addEventListener("click", guideSkip);
+  const exit = document.createElement("button");
+  exit.className = "btn";
+  exit.textContent = "Exit guide";
+  exit.addEventListener("click", exitGuide);
+  row.appendChild(nextBtn); row.appendChild(skip); row.appendChild(exit);
+  el.appendChild(row);
+}
+
+// He crafted it in-game: the whole batch is done in one tap (2026-10-19),
+// so drop the entire queue entry WITHOUT restoring ingredients
+// (they're really gone). Skips leave the queue untouched.
+function guideBrewed() {
+  const st = G.steps[G.idx];
+  markDiscovered(st);
+  G.brewedGold += st.price * st.qty;
+  const qi = S.queue.indexOf(st.qref);
+  if (qi !== -1) S.queue.splice(qi, 1);
+  G.idx++;
+  if (G.idx >= G.steps.length) renderGuideDone();
+  else renderGuideStep();
+}
+
+function guideSkip() {
+  G.idx++;
+  if (G.idx >= G.steps.length) renderGuideDone();
+  else renderGuideStep();
+}
+
+function renderGuideDone() {
+  G.active = false;
+  const el = $("guide");
+  el.innerHTML = "";
+  const d = document.createElement("div");
+  d.innerHTML = "<h3>All brewed! " + G.brewedGold + "g worth.</h3>" +
+    "<div class='hint'>Quicksave (F5) in-game, then hit Refresh up top " +
+    "to pick up your new stock.</div>";
+  el.appendChild(d);
+  const b = document.createElement("button");
+  b.className = "btn";
+  b.textContent = "Exit guide";
+  b.addEventListener("click", exitGuide);
+  el.appendChild(b);
+}
+
+function exitGuide() {
+  G.active = false;
+  $("guide").hidden = true;
+  document.querySelector("main").hidden = false;
+  document.querySelector("nav.tabs").hidden = false;
+  renderAll();  // queue box reappears only if brews remain
+}
+
+// ------------------------------------------------- optimal brew plan (2026-10-19)
+// "Do this, in this order for maximum profit": the server runs
+// brew_allocation (ruin-and-recreate + randomized polish, exact optimum
+// on real stocks) over the inventory; the page renders the ordered plan.
+function computePlan() {
+  const btn = $("planbtn");
+  btn.disabled = true;
+  btn.textContent = "Brewing the numbers…";
+  // Batch mode (2026-10-19): in "total gold" sort the server plans in
+  // whole batches (batch-value order, no fragmentation); in per-potion
+  // sort it squeezes max gold as before.
+  fetch("api/plan?min_price=" + S.minValue + "&sort=" + S.sort.key +
+        (S.neverBrew.size
+          ? "&nobrewing=" + encodeURIComponent([...S.neverBrew].join("\\n"))
+          : ""))
+    .then((r) => r.json())
+    .then((plan) => renderPlan(plan))
+    .catch(() => {
+      const el = $("plan");
+      el.hidden = false;
+      el.innerHTML = "<h3>Brew plan</h3><div class='hint'>Couldn't compute " +
+        "the plan — is the server still running?</div>";
+    })
+    .finally(() => { btn.disabled = false; btn.textContent = "Best plan"; });
+}
+
+// Plan brews in the active sort order (2026-10-19): the optimizer picks the
+// SET for maximum gold, but the SEQUENCE is Ben's call — per-potion value
+// first levels Alchemy fastest (XP scales with potion value), total-gold
+// first is for "I need gold right now". Re-sorting never changes the gold
+// total, only the brew order.
+function planBrewsSorted(plan) {
+  const arr = plan.brews.slice();
+  if (S.sort.key === "total") {
+    const tot = (b) => b.price * (b.qty || 1);
+    arr.sort((a, b) => tot(b) - tot(a));
+  } else {
+    arr.sort((a, b) => b.price - a.price);
+  }
+  return arr;
+}
+
+function renderPlan(plan) {
+  const el = $("plan");
+  el.hidden = false;
+  el.innerHTML = "";
+  if (!plan.ok || !plan.brews.length) {
+    el.innerHTML = "<h3>Brew plan</h3><div class='hint'>Nothing worth " +
+      "brewing at your min value.</div>";
+    return;
+  }
+  const h = document.createElement("h3");
+  h.innerHTML = "Brew this, in this order — <span class='p-total'>" +
+    plan.brews.length + " brews, " + plan.total_value + "g list (" +
+    plan.total_sell + "g selling)</span>";
+  el.appendChild(h);
+  // Buttons FIRST (2026-10-19: Ben shouldn't have to scroll past the whole
+  // list to queue it).
+  const row = document.createElement("div");
+  row.className = "p-rowbtns";
+  const q = document.createElement("button");
+  q.className = "btn";
+  q.textContent = "Queue it all";
+  q.title = "Queue every brewable plan item in order";
+  q.addEventListener("click", () => queuePlan(plan));
+  const d = document.createElement("button");
+  d.className = "btn";
+  d.textContent = "Dismiss";
+  d.addEventListener("click", () => { el.hidden = true; el.innerHTML = ""; });
+  row.appendChild(q); row.appendChild(d);
+  el.appendChild(row);
+  const ol = document.createElement("ol");
+  planBrewsSorted(plan).forEach((b) => {
+    const li = document.createElement("li");
+    li.innerHTML = b.ingredients.map(escapeHtml).join(" + ") +
+      (b.qty > 1 ? " <b>\u00d7" + b.qty + "</b>" : "") +
+      " — <span class='p-price'>" + b.price + "g</span> <span class='hint'>" +
+      b.effects.map(escapeHtml).join(" + ") + "</span>";
+    ol.appendChild(li);
+  });
+  el.appendChild(ol);
+  S.plan = plan;
+}
+
+function queuePlan(plan) {
+  let queued = 0, skipped = 0;
+  for (const b of planBrewsSorted(plan)) {
+    const p = { ingredients: b.ingredients.slice(), effects: b.effects.slice(),
+                price: b.price };
+    const want = b.qty || 1;
+    let got = 0;
+    for (let k = 0; k < want; k++) if (queueOne(p)) got++;
+    queued += got;
+    skipped += want - got;
+  }
+  renderAll();
+  const el = $("plan");
+  // renderAll doesn't touch #plan; report what happened.
+  const note = document.createElement("div");
+  note.className = "hint";
+  note.textContent = "Queued " + queued + " of " + plan.brews.length +
+    (skipped ? " (" + skipped + " skipped — ingredients already queued)" : "") + ".";
+  el.appendChild(note);
+}
+
 // ---------------------------------------------------------------- disenchant tab (2026-10-05)
 // Shows known enchantments auto-detected from save (Type-48 ChangeForms).
 function renderDisenchant() {
@@ -2776,6 +2966,18 @@ function renderDisenchant() {
   } else {
     enchEl.innerHTML = "<div class='empty'>No known enchantments detected.</div>";
   }
+  // Spells you know (2026-10-19, evening): the real list, from the
+  // player ACHR spell RefIDs — buyable-tome spells only (Ben's scope).
+  const spellEl = $("spell-tomes-read");
+  const spells = S.data.known_spells || [];
+  if (spells.length) {
+    spellEl.innerHTML = "<div class='hint'>Spells you know (" +
+      spells.length + " with buyable tomes):</div>" +
+      spells.map((t) => "<div class='disenchant-row'><div><b>" +
+        escapeHtml(t) + "</b></div></div>").join("");
+  } else {
+    spellEl.innerHTML = "<div class='empty'>No buyable-tome spells known yet.</div>";
+  }
 }
 
 function renderIngredients() {
@@ -2783,6 +2985,24 @@ function renderIngredients() {
     "Your ingredients (" + S.data.ingredients.length + ") — tap effects to mark known";
   const el = $("ingredients");
   el.innerHTML = "";
+  // Rescue triples (2026-10-19): for each ingredient, its best brewable
+  // 2-ingredient potion and best brewable 3-ingredient potion. If the best
+  // pair is below his value slider but a triple clears it, show the rescue
+  // ("it needs to be added to another potion"). Single pass over potions.
+  const ingBest = {};
+  for (const p of S.data.potions) {
+    const n = p.ingredients.length;
+    if ((n !== 2 && n !== 3) || !brewable(p)) continue;
+    for (const gname of p.ingredients) {
+      let e = ingBest[gname];
+      if (!e) e = ingBest[gname] = { pair: null, triple: null };
+      const partners = p.ingredients.filter((x) => x !== gname);
+      if (n === 2 && (!e.pair || p.price > e.pair.price))
+        e.pair = { price: p.price, with: partners };
+      if (n === 3 && (!e.triple || p.price > e.triple.price))
+        e.triple = { price: p.price, with: partners };
+    }
+  }
   for (const g of S.data.ingredients) {
     const left = S.remaining[g.name] || 0;
     const row = document.createElement("div");
@@ -2793,6 +3013,20 @@ function renderIngredients() {
     c.className = "count";
     c.textContent = "x" + left + " left";
     row.appendChild(n); row.appendChild(c);
+    // Never-brew toggle (2026-10-19): hoard this ingredient.
+    const nb = document.createElement("button");
+    const isNB = S.neverBrew.has(g.name);
+    nb.className = "nb" + (isNB ? " on" : "");
+    nb.textContent = "\\uD83D\\uDEAB";
+    nb.title = isNB ? "Reserved — tap to allow brewing"
+                    : "Tap to never brew with this ingredient";
+    nb.addEventListener("click", () => {
+      if (S.neverBrew.has(g.name)) S.neverBrew.delete(g.name);
+      else S.neverBrew.add(g.name);
+      setNeverBrew(S.neverBrew);
+      renderAll();
+    });
+    row.appendChild(nb);
     // Effect pills: show known status from the save (read-only).
     const effs = document.createElement("div");
     effs.className = "effpills";
@@ -2803,6 +3037,30 @@ function renderIngredients() {
       effs.appendChild(pill);
     }
     row.appendChild(effs);
+    // Best-brew verdict vs his slider.
+    if (left > 0) {
+      const b = ingBest[g.name];
+      const v = document.createElement("div");
+      v.className = "ingverdict";
+      if (S.neverBrew.has(g.name)) {
+        v.innerHTML = "\\uD83D\\uDEAB reserved — never brew";
+        v.className += " deadweight";
+      } else if (b && b.pair && b.pair.price >= S.minValue) {
+        v.innerHTML = "best brew <b>" + b.pair.price + "g</b> \u2713";
+      } else if (b && b.triple && b.triple.price >= S.minValue) {
+        v.innerHTML = "pair " + (b.pair ? b.pair.price : 0) + "g \u2192 " +
+          "triple +" + b.triple.with.map(escapeHtml).join(" +") +
+          ": <b>" + b.triple.price + "g</b> \u2713";
+      } else {
+        const best = b ? Math.max(b.pair ? b.pair.price : 0,
+                                 b.triple ? b.triple.price : 0) : 0;
+        v.textContent = best > 0
+          ? "best " + best + "g — below your bar"
+          : "no brewable potion";
+        v.className += " deadweight";
+      }
+      row.appendChild(v);
+    }
     el.appendChild(row);
   }
 }
@@ -2834,6 +3092,7 @@ function renderAll() {
   fillIngredientFilter();
   renderPriceTab();
   renderIngredients();
+  updateDetectedDisplay();  // refresh perk floors / sell factor line
 }
 
 function setTab(which) {
@@ -2851,13 +3110,17 @@ function resetState(data) {
   S.remaining = {};
   for (const g of data.ingredients) S.remaining[g.name] = g.count;
   S.queue = [];
-  S.sort = { key: "price", dir: -1 };
+  // Honor the saved sort mode (2026-10-19): per-potion default.
+  const savedMode = localStorage.getItem("skyrim-sortmode") || "per";
+  S.sort = { key: savedMode === "total" ? "total" : "price", dir: -1 };
   S.ingFilter = "";
   S.search = "";
   $("search").value = "";
   // Known effects come from the save file (authoritative).
   // Maps ingredient name -> list of known effect indexes (0-3).
   S.knownEffects = data.known_effects || {};
+  // Never-brew list persists across refreshes (2026-10-19).
+  S.neverBrew = getNeverBrew();
   // Keep a valid effect selection if possible.
   if (data.potions.length) {
     const top = data.potions.slice().sort((a, b) => b.price - a.price)[0];
@@ -2894,6 +3157,26 @@ function initAlchemySettingsUI() {
   updateDetectedDisplay();
 }
 
+// Sell settings (2026-10-19): Speech + Fortify Barter are manual
+// (Speech level-ups aren't in a parseable save location); Haggling
+// ranks and Allure auto-detect from the save.
+function getSellSettings() {
+  return {
+    speech: parseInt(localStorage.getItem("skyrim-speech-skill") || "15", 10) || 15,
+    fortifyBarter: parseFloat(localStorage.getItem("skyrim-fortify-barter") || "0") || 0,
+  };
+}
+function saveSellSettings(s) {
+  localStorage.setItem("skyrim-speech-skill", String(s.speech));
+  localStorage.setItem("skyrim-fortify-barter", String(s.fortifyBarter));
+}
+function initSellSettingsUI() {
+  const s = getSellSettings();
+  $("speech-skill").value = s.speech;
+  $("fortify-barter").value = Math.round(s.fortifyBarter * 100);
+  updateDetectedDisplay();
+}
+
 function updateDetectedDisplay() {
   const el = $("alch-detected");
   const d = (S.data && S.data.detected) || {};
@@ -2912,7 +3195,59 @@ function updateDetectedDisplay() {
   } else if (d.base_skill != null) {
     parts.push("No alchemy perks detected");
   }
+  // Perk-implied skill floor (2026-10-19): rank requirements prove the skill.
+  // The server clamps too, but the input itself is raised to the floor so
+  // it's visible (and the stale manual value is healed on save).
+  if (d.alchemy_floor) {
+    const inp = $("alch-skill");
+    const manual = parseInt(inp.value || "0", 10) || 0;
+    if (manual < d.alchemy_floor) {
+      inp.value = d.alchemy_floor;
+      const s = getAlchemySettings();
+      s.skill = d.alchemy_floor;
+      saveAlchemySettings(s);
+      parts.push("Skill raised to " + d.alchemy_floor + " (floor from perks; was " + manual + ")");
+    } else {
+      parts.push("Perks prove Alchemy \u2265 " + d.alchemy_floor);
+    }
+  }
   el.textContent = parts.length ? "Detected from save: " + parts.join(" | ") : "";
+
+  // Selling block (2026-10-19): Haggling/Allure auto-detected, Speech manual.
+  const sel = $("sell-detected");
+  if (sel) {
+    const sparts = [];
+    const sperks = [];
+    if (d.haggling_ranks) sperks.push("Haggling " + d.haggling_ranks);
+    if (d.allure) sperks.push("Allure");
+    if (sperks.length) sparts.push("Detected: " + sperks.join(", "));
+    else if (d.base_skill != null) sparts.push("No Speech perks detected");
+    if (d.speech_floor) {
+      const sinp = $("speech-skill");
+      const smanual = parseInt(sinp.value || "0", 10) || 0;
+      if (smanual < d.speech_floor) {
+        sinp.value = d.speech_floor;
+        const ss = getSellSettings();
+        ss.speech = d.speech_floor;
+        saveSellSettings(ss);
+        sparts.push("Speech raised to " + d.speech_floor + " (floor from perks; was " + smanual + ")");
+      } else {
+        sparts.push("Perks prove Speech \u2265 " + d.speech_floor);
+      }
+    }
+    const bd = (S.data && S.data.sell_breakdown) || null;
+    const sf = S.data && S.data.sell_factor;
+    if (bd && typeof sf === "number") {
+      let desc = "Merchants pay " + (sf * 100).toFixed(1) + "% of list " +
+        "(Speech " + bd.speech;
+      if (bd.haggling_ranks) desc += ", Haggling " + bd.haggling_ranks;
+      if (bd.allure) desc += ", Allure";
+      if (bd.fortify_barter) desc += ", +" + (bd.fortify_barter * 100) + "% Barter";
+      desc += ")";
+      sparts.push(desc);
+    }
+    sel.textContent = sparts.join(" | ");
+  }
 }
 
 function resetToDetected() {
@@ -2940,17 +3275,8 @@ async function load() {
   const btn = $("refresh");
   btn.disabled = true;
   btn.textContent = "Reading save…";
-  // Send this shop's exclusions and force-includes (from the last known location).
   let url = "/api/data";
   const params = [];
-  const lastLoc = localStorage.getItem("skyrim-shop-loc");
-  if (lastLoc) {
-    const excl = getExcluded(lastLoc);
-    const forced = getForced(lastLoc);
-    if (excl.size) params.push("exclude=" + encodeURIComponent([...excl].join("\\n")));
-    if (forced.size) params.push("force=" + encodeURIComponent([...forced].join("\\n")));
-    params.push("shop=" + encodeURIComponent(lastLoc));
-  }
   // Alchemy skill/perks for dynamic potion values.
   const alch = getAlchemySettings();
   params.push("alch_skill=" + alch.skill);
@@ -2958,6 +3284,10 @@ async function load() {
   params.push("alch_benefactor=" + (alch.benefactor ? "1" : "0"));
   params.push("alch_poisoner=" + (alch.poisoner ? "1" : "0"));
   params.push("alch_physician=" + (alch.physician ? "1" : "0"));
+  // Speech skill + Fortify Barter for the real sell formula (2026-10-19).
+  const sell = getSellSettings();
+  params.push("speech_skill=" + sell.speech);
+  params.push("fortify_barter=" + sell.fortifyBarter);
   if (params.length) url += "?" + params.join("&");
   try {
     const r = await fetch(url, { cache: "no-store" });
@@ -2990,6 +3320,7 @@ $("search").addEventListener("input", () => {
   S.search = $("search").value;
   renderPriceTab();  // cheap: re-render from the last good payload
 });
+$("planbtn").addEventListener("click", computePlan);
 $("ingfilter").addEventListener("change", () => {
   S.ingFilter = $("ingfilter").value;
   renderPriceTab();
@@ -2997,6 +3328,16 @@ $("ingfilter").addEventListener("change", () => {
 $("tabbtn-price").addEventListener("click", () => setTab("price"));
 $("tabbtn-disenchant").addEventListener("click", () => setTab("disenchant"));
 $("q-clear").addEventListener("click", clearQueue);
+$("q-guide").addEventListener("click", startGuide);
+// Sort mode (2026-10-19): per-potion value vs total extractable gold.
+$("sortmode").addEventListener("change", () => {
+  const v = $("sortmode").value;
+  S.sort = { key: v === "total" ? "total" : "price", dir: -1 };
+  localStorage.setItem("skyrim-sortmode", v);
+  renderPriceTab();
+  // A visible plan follows the new order too (2026-10-19).
+  if (S.plan && !$("plan").hidden) renderPlan(S.plan);
+});
 // Alchemy settings: init from localStorage, Apply saves and reloads.
 initAlchemySettingsUI();
 $("alch-apply").addEventListener("click", () => {
@@ -3015,6 +3356,20 @@ $("alch-apply").addEventListener("click", () => {
   load();  // reload with new stats
 });
 $("alch-reset-detected").addEventListener("click", resetToDetected);
+// Sell settings (2026-10-19): Speech skill + Fortify Barter, manual;
+// Haggling/Allure auto-detect from save. Apply saves and reloads.
+initSellSettingsUI();
+$("sell-apply").addEventListener("click", () => {
+  const s = {
+    speech: parseInt($("speech-skill").value, 10) || 15,
+    fortifyBarter: (parseFloat($("fortify-barter").value) || 0) / 100,
+  };
+  s.speech = Math.max(15, Math.min(100, s.speech));
+  s.fortifyBarter = Math.max(0, Math.min(2, s.fortifyBarter));
+  saveSellSettings(s);
+  initSellSettingsUI();
+  load();
+});
 // Min-value slider: persistent via localStorage.
 $("minval").value = S.minValue;
 $("minval-show").textContent = S.minValue;
@@ -3047,6 +3402,29 @@ class CompanionState:
             with open(names_path, "r", encoding="utf-8") as f:
                 names_data = json.load(f)
             self.ench_names = names_data.get("enchantments", {})
+        except (OSError, ValueError):
+            pass
+        # Spell tome names (FormID -> spell name) for the read-tomes list
+        # (2026-10-19): Ben's don't-buy-duplicate-tomes check.
+        self.spell_tomes = {}
+        try:
+            tomes_path = os.path.join(os.path.dirname(db_path),
+                                      "spell_tomes.json")
+            with open(tomes_path, "r", encoding="utf-8") as f:
+                tomes_data = json.load(f)
+            self.spell_tomes = tomes_data.get("tomes", {})
+        except (OSError, ValueError):
+            pass
+        # Buyable spell FormIDs (spell FormID -> name) for the real
+        # "spells you know" list (2026-10-19). Only spells with buyable
+        # tomes — racial abilities, shouts, quest-only spells excluded
+        # per Ben. Used with extract_known_spell_fids().
+        self.buyable_spells = {}
+        try:
+            bsp_path = os.path.join(os.path.dirname(db_path),
+                                    "buyable_spells.json")
+            with open(bsp_path, "r", encoding="utf-8") as f:
+                self.buyable_spells = json.load(f)
         except (OSError, ValueError):
             pass
         # ESM mappings (FormID -> EDID) as fallback for enchantment names.
@@ -3094,10 +3472,14 @@ class CompanionState:
 
         Returns {base_skill: int|None, alchemist_ranks: int,
                  benefactor: bool, poisoner: bool, physician: bool,
-                 purity: bool}.
+                 purity: bool, haggling_ranks: int, allure: bool,
+                 alchemy_floor: int, speech_floor: int}.
         Base skill is from NPC_ DNAM (includes racial, excludes level-ups).
         Perks are from ACHR RefID search. Failures return defaults.
-        (2026-10-05: auto-detect with manual override.)
+        Floors come from perk rank requirements (EDID suffixes 00/20/40/60/80
+        verified against Skyrim.esm): having the rank proves the skill.
+        (2026-10-05: auto-detect with manual override; 2026-10-19: speech
+        perks + floors.)
         """
         result = {
             "base_skill": None,
@@ -3106,6 +3488,10 @@ class CompanionState:
             "poisoner": False,
             "physician": False,
             "purity": False,
+            "haggling_ranks": 0,
+            "allure": False,
+            "alchemy_floor": 0,
+            "speech_floor": 0,
         }
         try:
             base = extract_base_alchemy(save_path)
@@ -3116,26 +3502,47 @@ class CompanionState:
         try:
             perks = extract_perks(save_path)
             result.update(perks)
+            result["alchemy_floor"] = _PERK_SKILL_FLOOR.get(
+                perks.get("alchemist_ranks", 0), 0)
+            result["speech_floor"] = _PERK_SKILL_FLOOR.get(
+                perks.get("haggling_ranks", 0), 0)
         except Exception:
             pass
         return result
 
-    def read_current(self, exclude=frozenset(), exclude_shop="",
-                     force=frozenset(), force_shop="",
-                     alch_skill=15, alch_ranks=0,
+    def read_current(self, alch_skill=15, alch_ranks=0,
                      alch_benefactor=True, alch_poisoner=True,
-                     alch_physician=True) -> dict:
+                     alch_physician=True,
+                     speech_skill=15, fortify_barter=0.0) -> dict:
         """Parse the newest save; return the /api/data payload dict."""
         save_path = pick_save(self.saves_dir)
+        # Auto-detect perks/skill base from the save first (2026-10-05).
+        detected = self._get_detected_alchemy(save_path)
+        # Skill floors from perks (2026-10-19, Ben's request): manual skill
+        # settings go stale (his Alchemy 30 vs proven >= 40); perk rank
+        # requirements prove a minimum. Clamp the manual value UP to the
+        # floor, never down — a higher manual value (leveled past it) wins.
+        alch_skill = max(alch_skill, _PERK_SKILL_FLOOR.get(
+            detected.get("alchemist_ranks", 0), 0))
+        speech_skill = max(speech_skill, _PERK_SKILL_FLOOR.get(
+            detected.get("haggling_ranks", 0), 0))
         # Store alchemy stats for potion pricing.
         self.alch_skill = alch_skill
         self.alch_ranks = alch_ranks
         self.alch_benefactor = alch_benefactor
         self.alch_poisoner = alch_poisoner
         self.alch_physician = alch_physician
+        self.speech_skill = speech_skill
+        self.fortify_barter = fortify_barter
+        # Stage timings (2026-10-19): Ben's 4-second rule — if a parse stage
+        # costs real time, it earns scrutiny; if not, it stays.
+        t_all = time.perf_counter()
+        timings = {}
         try:
+            t0 = time.perf_counter()
             raw_items, info, plugins, light_plugins = \
                 extract_player_inventory(save_path)
+            timings["player_inventory"] = time.perf_counter() - t0
         except (SaveParseError, ValueError) as e:
             return {"ok": False,
                     "error": "Save parse failed: %s" % e}
@@ -3146,7 +3553,9 @@ class CompanionState:
         # Maps ingredient name -> list of known effect indexes (0-3).
         known_effects = {}
         try:
+            t0 = time.perf_counter()
             known_raw = extract_known_ingredients(save_path)
+            timings["known_effects"] = time.perf_counter() - t0
             for fid, bitmask in known_raw.items():
                 plugin, obj_id = split_formid(fid, plugins, light_plugins)
                 if plugin is None:
@@ -3159,16 +3568,55 @@ class CompanionState:
                                        if bitmask & (1 << j)]
         except Exception:
             pass  # known effects are optional; don't break the page
-        # Known spells and enchantments from save (2026-10-05).
-        # Type 13 = spells, Type 48 = enchantments. Flags on base Form.
-        known_spells = []
-        known_enchantments = []
+        # Spell tomes read (2026-10-19): Ben's don't-buy-duplicates check.
+        # Type 13 = BOOK read flags; spell tomes set them like regular
+        # books (verified by save diff: Fast Healing tome 0x000A271D).
+        # Names only, no hex (his call).
+        spell_tomes_read = []
         try:
-            known_spells = ["0x%08X" % fid
-                            for fid in extract_known_spells(save_path)]
+            t0 = time.perf_counter()
+            for fid in extract_read_books(save_path):
+                fid_str = "0x%08X" % fid
+                name = self.spell_tomes.get(fid_str)
+                if name:
+                    spell_tomes_read.append(name)
+            spell_tomes_read.sort()
+            timings["spell_tomes_read"] = time.perf_counter() - t0
         except Exception:
             pass
+        # Starting spells: every character knows Flames + Healing without
+        # reading tomes (2026-10-19, Ben's ask).
+        for starter in ("Flames", "Healing"):
+            if starter not in spell_tomes_read:
+                spell_tomes_read.append(starter + " (starting spell)")
+        spell_tomes_read.sort()
+        # Spells you KNOW (2026-10-19, later that evening): the real list,
+        # extracted from the player ACHR spell RefIDs — catches spells
+        # learned any way (tomes, NPC grants like Faralda's entry test).
+        # Scope per Ben: only spells with BUYABLE tomes (no racial
+        # abilities, no shouts, no quest-only spells). Starting spells are
+        # on the ActorBase, not the ACHR, so they're added manually.
+        known_spells = []
         try:
+            t0 = time.perf_counter()
+            if self.buyable_spells:
+                fids = [int(k, 16) for k in self.buyable_spells]
+                for fid in extract_known_spell_fids(save_path, fids):
+                    name = self.buyable_spells.get("0x%08X" % fid)
+                    if name and name not in known_spells:
+                        known_spells.append(name)
+            for starter in ("Flames", "Healing"):
+                if starter not in known_spells:
+                    known_spells.append(starter)
+            known_spells.sort()
+            timings["known_spells"] = time.perf_counter() - t0
+        except Exception:
+            known_spells = []
+        # Known enchantments from save (2026-10-05).
+        # Type 48 = enchantments. Flags on base Form.
+        known_enchantments = []
+        try:
+            t0 = time.perf_counter()
             for fid in extract_known_enchantments(save_path):
                 fid_str = "0x%08X" % fid
                 # Priority: manual names > ESM EDID > FormID
@@ -3184,40 +3632,27 @@ class CompanionState:
                     "formid": fid_str,
                     "name": name,
                 })
+            timings["known_enchantments"] = time.perf_counter() - t0
         except Exception:
             pass
         owned = inventory_to_ingredients(raw_items, plugins, light_plugins,
                                          self.lookup)
         # Effect-grouping approach (2026-10-05): O(E*I^2) not O(n^3).
         # No pre-computed table needed.
+        t0 = time.perf_counter()
         potions = brewable_by_effect(
             owned, skill=self.alch_skill, alchemist_ranks=self.alch_ranks,
             benefactor=self.alch_benefactor, poisoner=self.alch_poisoner,
             physician=self.alch_physician)
-        # Shopping list via effect-grouping (2026-10-05 approach).
-        # No merchant detection, no pre-computed table, no O(n^3).
-        shop = None
-        gold = next((c for f, c in raw_items if f == 0xF), 0)
-        recs = shopping_by_effect(owned, self.ing_db, gold,
-                                  exclude=exclude, force_include=force)
-        # Baseline: quick greedy estimate of inventory-only brew value.
-        # (Don't use brew_allocation here — its 400 randomized iterations
-        # over 4,916 table potions hangs. This is just for the shop's
-        # "nets Xg" display, not the actual brew plan.)
-        _counts = {o["name"]: o["count"] for o in owned}
-        baseline = 0
-        for p in potions:
-            if p["price"] < 100:
-                break
-            ings = p["ingredients"]
-            if all(_counts.get(i, 0) > 0 for i in ings):
-                for i in ings:
-                    _counts[i] -= 1
-                baseline += p["price"]
-        shop = {"gold": gold,
-                "baseline_value": baseline,
-                "baseline_sell": int(baseline * SELL_FACTOR),
-                "plan": recs}
+        timings["brewable_by_effect"] = time.perf_counter() - t0
+        # Real sell factor (2026-10-19): UESP barter formula from the player's
+        # real Speech skill (manual), Haggling ranks + Allure (auto-detected),
+        # and Fortify Barter (manual). Replaces the flat 0.3 estimate.
+        # (detected was computed at the top of read_current; skills already
+        # clamped to perk floors there.)
+        sell_factor = real_sell_factor(
+            self.speech_skill, detected.get("haggling_ranks", 0),
+            detected.get("allure", False), self.fortify_barter)
         payload = {
             "ok": True,
             "save_name": os.path.basename(save_path),
@@ -3227,12 +3662,23 @@ class CompanionState:
             "player": info.get("playerName", "?"),
             "ingredients": owned,
             "potions": potions,
-            "shop": shop,
             "known_effects": known_effects,
-            "known_spells": known_spells,
             "known_enchantments": known_enchantments,
-            "detected": self._get_detected_alchemy(save_path),
+            "spell_tomes_read": spell_tomes_read,
+            "known_spells": known_spells,
+            "detected": detected,
+            "sell_factor": sell_factor,
+            "sell_breakdown": {
+                "speech": self.speech_skill,
+                "haggling_ranks": detected.get("haggling_ranks", 0),
+                "allure": detected.get("allure", False),
+                "fortify_barter": self.fortify_barter,
+            },
         }
+        timings["total"] = time.perf_counter() - t_all
+        sys.stderr.write("[timing] read_current stages (s): " +
+                         ", ".join("%s=%.2f" % (k, v)
+                                    for k, v in timings.items()) + "\n")
         with self.lock:
             self.last_good = payload
         return payload
@@ -3256,14 +3702,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/":
             self._send(PAGE_HTML.encode("utf-8"),
                        "text/html; charset=utf-8")
+        elif self.path == "/flow":
+            self._send(FLOW_HTML.encode("utf-8"),
+                       "text/html; charset=utf-8")
         elif self.path == "/api/data" or self.path.startswith("/api/data?"):
             qs = urllib.parse.urlparse(self.path).query
             args = urllib.parse.parse_qs(qs)
-            excl_raw = args.get("exclude", [""])[0]
-            for_shop = args.get("shop", [""])[0]
-            exclude = frozenset(e for e in excl_raw.split("\n") if e)
-            force_raw = args.get("force", [""])[0]
-            force = frozenset(e for e in force_raw.split("\n") if e)
             # Alchemy skill/perks for dynamic potion values (2026-10-05).
             try:
                 alch_skill = int(args.get("alch_skill", ["15"])[0])
@@ -3276,14 +3720,95 @@ class Handler(http.server.BaseHTTPRequestHandler):
             alch_benefactor = args.get("alch_benefactor", ["0"])[0] == "1"
             alch_poisoner = args.get("alch_poisoner", ["0"])[0] == "1"
             alch_physician = args.get("alch_physician", ["0"])[0] == "1"
+            # Speech skill + Fortify Barter for the real sell formula
+            # (2026-10-19). Speech can't be auto-detected (see docstring on
+            # extract_base_alchemy) so it's manual, like alchemy skill.
+            try:
+                speech_skill = int(args.get("speech_skill", ["15"])[0])
+            except ValueError:
+                speech_skill = 15
+            try:
+                fortify_barter = float(args.get("fortify_barter", ["0"])[0])
+            except ValueError:
+                fortify_barter = 0.0
             payload = state.read_current(
-                exclude=exclude, exclude_shop=for_shop,
-                force=force, force_shop=for_shop,
                 alch_skill=alch_skill, alch_ranks=alch_ranks,
                 alch_benefactor=alch_benefactor,
                 alch_poisoner=alch_poisoner,
-                alch_physician=alch_physician)
+                alch_physician=alch_physician,
+                speech_skill=speech_skill,
+                fortify_barter=fortify_barter)
             body = json.dumps(payload).encode("utf-8")
+            self._send(body, "application/json")
+        elif self.path == "/api/plan" or self.path.startswith("/api/plan?"):
+            # Optimal brew plan (2026-10-19): "do this, in this order for
+            # maximum profit." Runs brew_allocation over the last-read
+            # inventory (a few seconds on triple-sized lists -- on demand,
+            # never on page load). min_price tracks the page's slider.
+            qs = urllib.parse.urlparse(self.path).query
+            args = urllib.parse.parse_qs(qs)
+            try:
+                min_price = int(args.get("min_price", ["100"])[0])
+            except ValueError:
+                min_price = 100
+            # Never-brew list (2026-10-19): hoarded ingredients count as
+            # zero stock so the optimizer routes around them.
+            nb_raw = args.get("nobrewing", [""])[0]
+            nobrewing = set(e for e in nb_raw.split("\n") if e)
+            with state.lock:
+                last = state.last_good
+            if not last or not last.get("ok"):
+                body = json.dumps({"ok": False,
+                                   "error": "no data yet"}).encode("utf-8")
+            else:
+                potions = last["potions"]
+                counts = {o["name"]: o["count"] for o in last["ingredients"]}
+                for n in nobrewing:
+                    if n in counts:
+                        counts[n] = 0
+                # Optimize (2026-10-19): _greedy_brew breaks at the first
+                # potion below min_price, so below-bar potions can never be
+                # brewed — they're pure dead weight in every sort/greedy
+                # pass (17k potions -> a few hundred at a 300g bar).
+                # Exactly equivalent for the greedy; strictly better for the
+                # randomized polish (a boosted below-bar potion can no longer
+                # spuriously break a pass early). Bonus: the adaptive
+                # iteration count scales up on the smaller list, so the
+                # search gets more iterations, each far cheaper.
+                potions = [p for p in potions if p["price"] >= min_price]
+                # Batch mode (2026-10-19): when the page sorts by total
+                # gold, plan in whole batches (batch value order) instead
+                # of fragmenting for marginal per-potion gains.
+                batch_mode = args.get("sort", ["per"])[0] == "total"
+                total, brewed = brew_allocation(potions, counts, min_price,
+                                                batch_mode=batch_mode)
+                # Collapse repeat brews into qty lines (2026-10-19), richest
+                # first. _greedy_brew now brews every possible batch.
+                groups = {}
+                for p in brewed:
+                    key = (tuple(p["ingredients"]), tuple(p["effects"]))
+                    if key in groups:
+                        groups[key]["qty"] += 1
+                    else:
+                        groups[key] = {
+                            "ingredients": p["ingredients"],
+                            "effects": p["effects"],
+                            "price": p["price"],
+                            "qty": 1,
+                        }
+                brews = sorted(groups.values(), key=lambda b: -b["price"])
+                # Real sell value (2026-10-19): use the sell factor computed
+                # from the player's actual Speech/Haggling/Allure on the last
+                # refresh, not the flat 0.3 estimate.
+                sell_factor = last.get("sell_factor", SELL_FACTOR)
+                body = json.dumps({
+                    "ok": True,
+                    "min_price": min_price,
+                    "total_value": total,
+                    "total_sell": int(total * sell_factor),
+                    "sell_factor": sell_factor,
+                    "brews": brews,
+                }).encode("utf-8")
             self._send(body, "application/json")
         elif self.path == "/api/shutdown":
             # Graceful shutdown for manually-run instances.
@@ -3336,7 +3861,7 @@ def main(argv=None) -> int:
                                          lookup)
         print(json.dumps({"save": os.path.basename(path),
                           "ingredients": owned,
-                          "potions": compute_potions(owned)}, indent=2))
+                          "potions": brewable_by_effect(owned)}, indent=2))
         return 0
 
     saves_dir = find_saves_dir(args.saves_dir)
