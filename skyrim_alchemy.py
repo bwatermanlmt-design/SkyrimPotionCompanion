@@ -675,7 +675,24 @@ def parse_achr_inventory(
             item_start = cur.pos
             try:
                 b0, b1, b2 = cur.u8(), cur.u8(), cur.u8()
+                # Validate the RefID before trusting it (2026-11-16: a
+                # misaligned read yields a kind-0 index out of range, which
+                # used to kill the whole parse at resolve time. Treat it as
+                # an unparseable entry so the resync below can recover.)
+                _kind = b0 >> 6
+                if _kind not in (0, 1, 2):
+                    raise SaveParseError("bad RefID kind %d" % _kind)
+                if _kind == 0 and formid_array is not None:
+                    _val = ((b0 & 0x3F) << 16) | (b1 << 8) | b2
+                    if _val == 0 or _val - 1 >= len(formid_array):
+                        raise SaveParseError(
+                            "RefID index %d out of range" % _val)
                 count = cur.i32()
+                # Absurd counts mean the read is misaligned, not a real stack
+                # (2026-11-16: garbage counts ran to the billions). Small
+                # negative counts are a known quirk of the format and stay.
+                if count < -1000 or count > 1000000:
+                    raise SaveParseError("implausible item count %d" % count)
                 _skip_extradata(cur)
                 raw_items.append(((b0, b1, b2), count))
             except (SaveParseError, IndexError, ValueError):
@@ -697,7 +714,9 @@ def parse_achr_inventory(
                                     continue
                             # Trial parse: count + extra data
                             tcur = Cursor(data, off + 3)
-                            tcur.i32()  # count
+                            tcount = tcur.i32()  # count
+                            if tcount < -1000 or tcount > 1000000:
+                                continue
                             # Peek extra data count (VSVal)
                             epos = tcur.pos
                             eb0 = tcur.u8()
@@ -829,8 +848,13 @@ def extract_player_inventory(
             refid_kind = b0 >> 6
             raw_items = parse_achr_inventory(data, change_flags, refid_kind,
                                              formid_array)
-            items = [(resolve_refid(x0, x1, x2, formid_array), count)
-                     for (x0, x1, x2), count in raw_items]
+            items = []
+            for (x0, x1, x2), count in raw_items:
+                try:
+                    items.append(
+                        (resolve_refid(x0, x1, x2, formid_array), count))
+                except SaveParseError:
+                    continue
             return items, info, plugins, light_plugins
 
     raise SaveParseError(
